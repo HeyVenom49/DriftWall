@@ -171,6 +171,26 @@ enum SmokeTest {
             check(false, "second import for removal test")
         }
 
+        // Lock screen (scratch folder only: the saver is not installed and the system picture is not changed).
+        let bundledSaver = Bundle.main.resourceURL?.appendingPathComponent("Driftwall.saver")
+        check(bundledSaver.flatMap { Bundle(url: $0)?.infoDictionary?["NSPrincipalClass"] as? String } == "DriftwallSaverView", "screen-saver module bundled in the app")
+        check(app.lockScreen.capabilities.videoWhileLocked.isSupported, "lock-screen video supported on this macOS")
+        app.apply(sample.id, target: .allDisplays)
+        app.settings.lockScreen.isEnabled = true
+        app.settings.lockScreen.useDesktopWallpaper = true
+        expect(await app.applyLockScreen(quiet: true), "lock screen applied (same as desktop)")
+        check(app.lockScreen.config?.wallpaperID == sample.id, "lock screen follows desktop wallpaper")
+        app.apply("sample.deep-tide", target: .allDisplays)
+        expect(await wait { app.lockScreen.config?.wallpaperID == "sample.deep-tide" }, "lock screen updates when the desktop changes")
+        app.chooseLockScreenWallpaper("sample.nebula-bloom", useDesktop: false)
+        expect(await app.applyLockScreen(quiet: true), "independent lock-screen wallpaper applied")
+        app.apply(sample.id, target: .allDisplays)
+        try? await Task.sleep(for: .milliseconds(300))
+        check(app.lockScreen.config?.wallpaperID == "sample.nebula-bloom", "independent lock screen ignores desktop changes")
+        check(app.lockScreen.config.map { FileManager.default.fileExists(atPath: $0.mediaPath) } == true, "lock-screen video copied")
+        app.setLockScreenEnabled(false)
+        check(app.lockScreen.config == nil, "disabling clears the lock-screen video")
+
         // Settings persistence through a fresh store on the same database file.
         app.settings.videoGravity = .fit
         if let reopened = try? SQLiteLibraryStore.open(at: app.paths.databaseURL).store {

@@ -137,7 +137,7 @@ struct AppCommands: Commands {
         }
     }
 
-    static let shortcutItems: [SidebarItem] = [.home, .explore, .favorites, .recent, .playlists, .library, .displays]
+    static let shortcutItems: [SidebarItem] = [.home, .explore, .favorites, .recent, .playlists, .library, .displays, .lockScreen]
 }
 
 extension NSWindow {

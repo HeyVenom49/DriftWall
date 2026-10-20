@@ -37,6 +37,7 @@ extension AppController {
         library.recordApplied(id)
         reconcileDesktop()
         syncSystemWallpaperFrames()
+        followDesktopOnLockScreen()
         if !fromRotation {
             log.log(.info, "wallpaper", "Applied “\(wallpaper.title)”")
         }

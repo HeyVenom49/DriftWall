@@ -72,6 +72,7 @@ smoke test takes the place of UI automation.
 | **My Videos** | Imported videos, drop zone, Check Files, missing-file panel with Locate…/Remove |
 | **Import** | Native open panel (files or folders) and drag and drop anywhere on the window. Accepts `.mov`, `.mp4` and `.m4v` and checks them with AVFoundation (playable, has a video track, non-zero duration). Reads metadata, generates thumbnails, rejects duplicates and reports per-file errors. Files are referenced in place through bookmarks that follow moves and renames, or copied into the library (setting) |
 | **Displays** | Arrangement diagram, per-display or same-on-all mode, per-display wallpaper choice and clear, default target, remembered assignments for disconnected displays |
+| **Lock Screen** | Video while the Mac is locked, through the bundled `Driftwall.saver` screen-saver module (public ScreenSaver API). Same-as-desktop or independent wallpaper, preview, compatibility check, setup checklist (module installed, selected, password delay), Test Now, optional still system picture. Honest capability table for the running macOS |
 | **Menu bar** | Current wallpaper, pause state, Pause/Resume, Next/Previous, Recent, Favorites, Playlists (start/pause/stop rotation), Stop, Open, Settings, Quit |
 | **Settings** | General (launch at login, Dock icon, restore on launch), Playback (scaling, desktop icons, hover previews, power behavior, system-wallpaper sync, live status), Displays, Rotation, Library and Cache (sizes, clear), Appearance, Shortcuts (including optional global hot keys), Diagnostics (event log, copy log) |
 
@@ -99,9 +100,11 @@ wallpaper. Optional global shortcuts (⌃⌥⌘P, ⌃⌥⌘→, ⌃⌥⌘←) wo
 
 These are summarized here; [TECHNICAL_LIMITATIONS.md](TECHNICAL_LIMITATIONS.md) has the details.
 
-- The live wallpaper is a desktop-level window, **not** a system wallpaper. The lock screen, login
-  window and screen saver cannot show it. An optional setting sets a matching still frame as the
-  system wallpaper.
+- The live wallpaper is a desktop-level window, **not** a system wallpaper.
+- **Lock screen:** video plays while the Mac is locked through Driftwall's screen saver, which you
+  select in System Settings. The password prompt and login window themselves can only show a still
+  picture: macOS offers no public API for video there, and its system video wallpapers require a
+  private Apple entitlement.
 - Only video files are supported (no still images, GIFs or web wallpapers).
 - The app has an ad-hoc signature only. It is not notarized, so it is not ready for distribution.
 - Launch at login relies on `SMAppService`, which may need approval in System Settings › Login Items.

@@ -164,6 +164,34 @@ Rotation state, including the current item, is persisted in `AppSettings.rotatio
 - The launch flags `--smoke-test` and `--ui-snapshots <dir>` are for development only. Both refuse to
   run unless `DRIFTWALL_DATA_DIR` is set.
 
+## Lock screen
+
+The lock screen is separate from the desktop engine:
+
+```
+LockScreenView ──▶ AppController+LockScreen ──▶ LockScreenWallpaperService (Core, testable)
+                                                   └──▶ LockScreenSystem protocol
+                                                         ├─ MacLockScreenSystem (app): install saver, read selection, NSWorkspace picture
+                                                         └─ FakeLockScreenSystem (tests)
+Driftwall.saver (ScreenSaver/DriftwallSaverView.swift) ◀── reads LockScreen/config.json + Media/<id>.mov
+```
+
+- **`LockScreenCapabilities.evaluate`** reports the four capabilities separately (static image,
+  system video wallpaper, video while locked, desktop video).
+- **`LockScreenMediaCompatibility`** checks availability, metadata, container and codec.
+- **`apply`:**
+  1. Clones the video into `LockScreen/Media/`.
+  2. Writes `config.json` atomically.
+  3. Removes stale copies.
+  4. Reads the config back.
+
+  It reports success only after that verification.
+- **"Same as desktop" mode** re-applies whenever the main display's wallpaper changes.
+- **At launch**, `restoreLockScreen()` re-applies if the config no longer matches the preferences.
+- **The saver is a separate bundle** built by `scripts/build_app.sh` (universal arm64 + x86_64,
+  ad-hoc signed) and embedded in the app's Resources. It is installed into `~/Library/Screen Savers`
+  on request. It logs to the subsystem `local.driftwall.saver`.
+
 ## Search
 
 `WallpaperSearchEngine` is the extension point. `KeywordSearchEngine` is local keyword matching, not

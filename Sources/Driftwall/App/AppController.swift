@@ -40,6 +40,10 @@ final class AppController {
     @ObservationIgnored let thumbnailLoader: ThumbnailLoader
     @ObservationIgnored let importer: MediaImporter
     @ObservationIgnored let rotation: RotationCoordinator
+    let lockScreen: LockScreenWallpaperService
+    @ObservationIgnored let lockScreenSystem = MacLockScreenSystem()
+    /// "immediate", "5 seconds", … as reported by the system; nil while unknown.
+    var passwordDelay: String?
     @ObservationIgnored private let systemEvents = SystemEventMonitor()
     @ObservationIgnored let log = DiagnosticsLog.shared
 
@@ -94,6 +98,8 @@ final class AppController {
         rotation = RotationCoordinator(library: library, settingsModel: settingsModel) { id, displayID in
             owner.controller?.apply(id, target: displayID.map { .display(id: $0) } ?? .allDisplays, fromRotation: true)
         }
+        lockScreen = LockScreenWallpaperService(directory: paths.supportDirectory.appendingPathComponent("LockScreen", isDirectory: true),
+                                                system: lockScreenSystem)
         owner.controller = self
         log.onChange = { [weak self] in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.diagnosticsEpoch &+= 1 } }
@@ -140,6 +146,11 @@ final class AppController {
         GlobalHotKeyCenter.shared.setEnabled(settings.globalHotKeysEnabled)
         applyDockPolicy()
         syncLaunchAtLoginState()
+        restoreLockScreen()
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            // The user may have just changed the screen saver in System Settings.
+            MainActor.assumeIsolated { self?.refreshLockScreen() }
+        }
     }
 
     func shutdown() {
@@ -306,7 +317,8 @@ final class AppController {
 
     /// Sets the static system wallpaper of each display to a still frame of its live wallpaper.
     func syncSystemWallpaperFrames() {
-        guard settings.syncSystemWallpaper else { return }
+        // When the lock screen owns the system picture, the desktop must not overwrite it.
+        guard settings.syncSystemWallpaper, !(settings.lockScreen.isEnabled && settings.lockScreen.setsStillSystemPicture) else { return }
         for state in engine.surfaceStates.values {
             guard let wallpaper = library.wallpaper(state.wallpaperID), let url = library.mediaURL(for: wallpaper.id),
                   let display = displays.display(id: state.displayID), let screen = displays.screen(for: display) else { continue }

@@ -30,12 +30,45 @@ GEN_BIN="$(swift build -c release --show-bin-path)/SampleMediaGenerator"
 echo "▸ Rendering original sample wallpapers (cached after the first run)"
 "$GEN_BIN" "$GENERATED"
 
+echo "▸ Building the lock-screen module (Driftwall.saver)"
+SAVER="$BUILD_DIR/Driftwall.saver"
+SAVER_SDK="${SDKROOT:-$(xcrun --show-sdk-path)}"
+rm -rf "$SAVER" "$BUILD_DIR/saver-obj" && mkdir -p "$SAVER/Contents/MacOS" "$BUILD_DIR/saver-obj"
+for arch in arm64 x86_64; do
+  swiftc -O -module-name DriftwallSaver -target "$arch-apple-macos14.0" -sdk "$SAVER_SDK" \
+    -emit-library -Xlinker -bundle -o "$BUILD_DIR/saver-obj/DriftwallSaver-$arch" \
+    -framework ScreenSaver -framework AVFoundation "$ROOT/ScreenSaver/DriftwallSaverView.swift"
+done
+lipo -create "$BUILD_DIR"/saver-obj/DriftwallSaver-* -output "$SAVER/Contents/MacOS/DriftwallSaver"
+rm -rf "$BUILD_DIR/saver-obj"
+cat > "$SAVER/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleExecutable</key><string>DriftwallSaver</string>
+  <key>CFBundleIdentifier</key><string>local.driftwall.saver</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>Driftwall</string>
+  <key>CFBundleDisplayName</key><string>Driftwall</string>
+  <key>CFBundlePackageType</key><string>BNDL</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>NSPrincipalClass</key><string>DriftwallSaverView</string>
+</dict>
+</plist>
+PLIST
+codesign --force --sign - --timestamp=none "$SAVER"
+
 echo "▸ Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Samples"
 cp "$BIN_DIR/Driftwall" "$APP/Contents/MacOS/Driftwall"
 cp "$ROOT/Resources/Catalog.json" "$APP/Contents/Resources/"
 cp "$GENERATED"/Samples/*.mov "$APP/Contents/Resources/Samples/"
+cp -R "$SAVER" "$APP/Contents/Resources/Driftwall.saver"
 
 ICONSET="$BUILD_DIR/AppIcon.iconset"
 rm -rf "$ICONSET" && mkdir -p "$ICONSET"

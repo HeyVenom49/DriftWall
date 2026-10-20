@@ -53,6 +53,7 @@ struct RootView: View {
         case .recent: RecentView()
         case .library: LibraryView()
         case .displays: DisplaysView()
+        case .lockScreen: LockScreenView()
         case .playlists: PlaylistsOverviewView()
         case .playlist(let id): PlaylistDetailView(playlistID: id)
         }
@@ -165,6 +166,7 @@ struct SidebarView: View {
             Section("Library") {
                 row(.library, badge: app.library.missingWallpapers.count)
                 row(.displays)
+                row(.lockScreen)
             }
             Section {
                 NavigationLink(value: SidebarItem.playlists) {

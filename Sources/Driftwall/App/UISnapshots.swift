@@ -23,10 +23,13 @@ enum UISnapshots {
             if let playlist = app.library.createPlaylist(named: "Evening Calm", items: ["sample.deep-tide", "sample.aurora-drift", "sample.silk-mono"]) {
                 app.apply("sample.ember-dusk")
                 app.apply("sample.aurora-drift")
+                // Prepare the lock screen without installing the saver (scratch data folder only).
+                app.settings.lockScreen.isEnabled = true
+                await app.applyLockScreen(quiet: true)
                 try? await Task.sleep(for: .seconds(2))
                 let screens: [(String, SidebarItem)] = [
                     ("home", .home), ("explore", .explore), ("favorites", .favorites), ("recent", .recent),
-                    ("library", .library), ("displays", .displays), ("playlist", .playlist(playlist.id)),
+                    ("library", .library), ("displays", .displays), ("lockscreen", .lockScreen), ("playlist", .playlist(playlist.id)),
                 ]
                 for (name, item) in screens {
                     app.navigation.show(item)

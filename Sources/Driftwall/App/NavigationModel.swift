@@ -2,7 +2,7 @@ import DriftwallCore
 import Observation
 
 enum SidebarItem: Hashable {
-    case home, explore, favorites, recent, library, displays, playlists
+    case home, explore, favorites, recent, library, displays, lockScreen, playlists
     case playlist(String)
 
     var title: String {
@@ -13,6 +13,7 @@ enum SidebarItem: Hashable {
         case .recent: return "Recent"
         case .library: return "My Videos"
         case .displays: return "Displays"
+        case .lockScreen: return "Lock Screen"
         case .playlists: return "Playlists"
         case .playlist: return "Playlist"
         }
@@ -26,6 +27,7 @@ enum SidebarItem: Hashable {
         case .recent: return "clock.arrow.circlepath"
         case .library: return "film.stack"
         case .displays: return "display.2"
+        case .lockScreen: return "lock.display"
         case .playlists: return "list.bullet.rectangle"
         case .playlist: return "music.note.list"
         }

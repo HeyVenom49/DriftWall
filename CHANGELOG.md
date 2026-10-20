@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.1.0 — 2026-10-20
+
+### Added
+- **Lock Screen**: video while the Mac is locked, through a new public-API screen-saver module
+  (`Driftwall.saver`), plus a `LockScreenWallpaperService` with an injectable system layer.
+  The new screen includes:
+  - the capability table for the running macOS;
+  - same-as-desktop or independent wallpaper, with preview and compatibility checks;
+  - a setup checklist (module installed, selected, password delay) and Test Now;
+  - an optional still system picture.
+- 15 unit tests and 9 end-to-end checks for the lock screen.
+
+### Fixed
+- Lock-screen apply deleted its own fresh copy when the folder path went through a symlink
+  (`/var` vs `/private/var`). Found by the new tests.
+- Applying to the lock screen on a brand-new library no longer fails while video metadata is still loading.
+
+### Not yet verified
+- Video playback on the real lock screen. It needs the user to select the screen saver and lock the Mac.
+
 ## 1.0.1 — 2026-10-20
 
 ### Changed

@@ -116,6 +116,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     // Rotation
     public var rotation = RotationSettings()
 
+    // Lock screen
+    public var lockScreen = LockScreenSettings()
+
     // Library
     public var copyImportsIntoLibrary = false
 
@@ -133,7 +136,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case videoGravity, userPaused, pauseOnBattery, pauseInLowPowerMode, pauseWhenDesktopHidden
         case showDesktopIcons, syncSystemWallpaper, hoverPreviews
         case displayMode, defaultTarget, mirrorWallpaperID
-        case rotation, copyImportsIntoLibrary, appearance, gridDensity, globalHotKeysEnabled
+        case rotation, lockScreen, copyImportsIntoLibrary, appearance, gridDensity, globalHotKeysEnabled
     }
 
     public init(from decoder: Decoder) throws {
@@ -160,6 +163,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         defaultTarget = value(.defaultTarget, d.defaultTarget)
         mirrorWallpaperID = value(.mirrorWallpaperID, d.mirrorWallpaperID)
         rotation = value(.rotation, d.rotation)
+        lockScreen = value(.lockScreen, d.lockScreen)
         copyImportsIntoLibrary = value(.copyImportsIntoLibrary, d.copyImportsIntoLibrary)
         appearance = value(.appearance, d.appearance)
         gridDensity = value(.gridDensity, d.gridDensity)

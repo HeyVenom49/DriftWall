@@ -239,7 +239,7 @@ private struct ShortcutSettings: View {
                 LabeledContent("Pause / resume wallpaper", value: "⌥⌘P")
                 LabeledContent("Next / previous wallpaper", value: "⌥⌘→ / ⌥⌘←")
                 LabeledContent("Search", value: "⌘F")
-                LabeledContent("Go to Home … Displays", value: "⌘1 … ⌘7")
+                LabeledContent("Go to Home … Lock Screen", value: "⌘1 … ⌘8")
                 LabeledContent("Set as wallpaper (detail)", value: "⌘↩")
                 LabeledContent("Favorite (detail)", value: "⌘L")
                 LabeledContent("Play / pause preview (detail)", value: "Space")

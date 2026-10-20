@@ -22,9 +22,8 @@ This file records what Driftwall depends on, what it cannot do, and what has not
 - Driftwall therefore uses a **workaround with public APIs**: a borderless, click-through window at
   the desktop window level on each display (see ARCHITECTURE.md). In normal use it behaves like a
   wallpaper, but it is **not identical** to one:
-  - **Lock screen, login window and screen saver** cannot show it. The optional "Match system
-    wallpaper" setting sets a still frame through `setDesktopImageURL` so those screens look
-    consistent. That setting replaces your previous desktop picture and does not restore it.
+  - **The lock screen and login window** cannot show the desktop window. Video while locked is a
+    separate feature, described in [Lock screen](#lock-screen) below.
   - **Mission Control and Show Desktop** may show the system wallpaper behind or around the video
     window while animating. How this looks was not systematically verified.
   - **Desktop icons and widgets.** With "Show desktop icons" on, the window sits below Finder's icon
@@ -32,6 +31,44 @@ This file records what Driftwall depends on, what it cannot do, and what has not
     not verified on every macOS version.
   - **After quitting**, the system wallpaper reappears.
   - **No private APIs are used**, and no system process (Dock, WindowServer, Finder) is modified.
+
+## Lock screen
+
+Investigated on macOS 27.0.1 (SDK 27.0). The four capabilities are independent:
+
+| Capability | Public mechanism? | Driftwall |
+| --- | --- | --- |
+| 1. Still picture behind the password/login UI | Only the shared system desktop picture (`NSWorkspace.setDesktopImageURL`). There's no separate lock-screen picture API. | Optional "Also use a still frame as the macOS system picture". |
+| 2. Video/dynamic **system** wallpaper | **No.** The `com.apple.wallpaper` extension point (used by Apple's Aerials) requires the private entitlement `com.apple.private.wallpaper.extension`, checked in `/System/Library/ExtensionKit/ExtensionPoints/com.apple.wallpaper.appexpt`. | Not attempted. Replacing Apple's Aerial video files would modify protected system assets, so it's excluded. |
+| 3. Video while the Mac is locked | **Yes, through a screen saver.** `ScreenSaver.framework` is public and not deprecated in SDK 27. Third-party modules run in Apple's sandboxed `legacyScreenSaver` host. Its entitlements allow read-only access to the whole file system and disable library validation, so an ad-hoc-signed module loads. | `Driftwall.saver`. When "Require password after screen saver begins" is **immediate**, the video plays full screen whenever the Mac is locked by the screen saver. |
+| 3b. Video **inside** the password/login UI itself | **No.** Nothing public lets an app draw on the lock/login UI, and drawing over it would interfere with authentication. | Not attempted. The password prompt appears over the still system picture. |
+| 4. Video on the unlocked desktop | Desktop-level windows (above). | Live desktop wallpaper. |
+
+How it works and what's limited:
+
+- **Locking with ⌃⌘Q** shows macOS's lock UI first. The screen saver (and so the video) starts after
+  the "Start Screen Saver when inactive" delay, or immediately through a hot corner or Driftwall's
+  **Test Now**.
+- **Selecting the screen saver is up to you.** You pick "Driftwall" in System Settings › Screen Saver;
+  Driftwall never writes that setting. Driftwall can read the selection (best effort, read-only) from
+  `~/Library/Application Support/com.apple.wallpaper/Store/Index.plist`. The format isn't documented,
+  so when it can't be read the status says so instead of reporting success.
+- **Status** is shown as "ready" only when the configuration has been written and read back, the video
+  copy exists, the module is installed, and the selection is confirmed.
+- **Playback doesn't need Driftwall to be running.** The module reads
+  `~/Library/Application Support/Driftwall/LockScreen/config.json` and a clone of the video stored next
+  to it. If the config is missing, the saver shows an instruction instead of failing silently.
+- **Multiple displays.** macOS runs one saver instance per display, and each plays the same video.
+  A different video per display isn't supported.
+- **Stopping playback.** Recent `legacyScreenSaver` versions don't reliably call `stopAnimation`, so the
+  module also stops on the `com.apple.screensaver.willstop` notification. That's a widely used
+  workaround, not documented API.
+- **Verification so far.**
+  - Driftwall's own side is covered by unit tests, end-to-end checks and the rendered UI.
+  - The module was loaded through its principal class in a test host, and its log showed AVFoundation
+    reached `playing`.
+  - Playback **on the real lock screen** had not yet been confirmed when this was written; it needs the
+    user to select the saver and lock the Mac. See the CHANGELOG for the result.
 
 ## Lifecycle and power signals
 
@@ -132,4 +169,4 @@ No claims about specific frame rates are made.
   window, onboarding, and keyboard navigation. The underlying actions are exercised by the smoke test.
   The UI controls themselves were not automated.
 - Sleep, wake, lock, unlock and fast user switching while a wallpaper is playing.
-- The "Match system wallpaper" setting, which would have replaced the user's real desktop picture.
+- The "Match system wallpaper" and lock-screen still-picture settings, which would have replaced the user's real desktop picture.
