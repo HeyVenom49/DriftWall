@@ -12,23 +12,36 @@ struct LockScreenView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.xl) {
                 PageHeader(title: "Lock Screen", subtitle: "Play a video wallpaper while your Mac is locked") {
-                    Toggle("Enabled", isOn: Binding(get: { lock.isEnabled }, set: { app.setLockScreenEnabled($0) }))
-                        .toggleStyle(.switch)
-                        .disabled(!app.lockScreen.isSupported)
-                }
-
-                CapabilityPanel(capabilities: app.lockScreen.capabilities)
-
-                if lock.isEnabled {
-                    SetupPanel(confirmTest: $confirmTest)
-                    sourcePanel(lock)
-                    stillPicturePanel(lock)
-                } else if app.lockScreen.isSupported {
-                    EmptyStateView(symbol: "lock.display", title: "Lock-screen video is off",
-                                   message: "Turn it on to play a wallpaper full screen while your Mac is locked. It works through a screen saver, which keeps playing even when Driftwall is closed.") {
-                        Button("Turn On") { app.setLockScreenEnabled(true) }.buttonStyle(.borderedProminent)
+                    if lock.isEnabled {
+                        Toggle("Enabled", isOn: Binding(get: { lock.isEnabled }, set: { app.setLockScreenEnabled($0) }))
+                            .toggleStyle(.switch)
                     }
                 }
+
+                if !app.lockScreen.isSupported {
+                    EmptyStateView(symbol: "lock.slash", title: "Not available on this Mac",
+                                   message: app.lockScreen.capabilities.videoWhileLocked.detail) { EmptyView() }
+                } else if app.isLockScreenReady {
+                    ReadyCard()
+                } else {
+                    SetupCard()
+                }
+
+                if lock.isEnabled && app.lockScreen.isSupported {
+                    sourcePanel(lock)
+                }
+
+                DisclosureGroup("Details") {
+                    VStack(alignment: .leading, spacing: Theme.Space.l) {
+                        CapabilityPanel(capabilities: app.lockScreen.capabilities)
+                        if lock.isEnabled {
+                            SetupPanel(confirmTest: $confirmTest)
+                            stillPicturePanel(lock)
+                        }
+                    }
+                    .padding(.top, Theme.Space.m)
+                }
+                .foregroundStyle(.secondary)
             }
             .padding(Theme.Space.page)
         }
@@ -309,5 +322,91 @@ private struct LockScreenChoice: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(wallpaper.title)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// Shown until everything is in place: one button does all the work Driftwall is allowed to do, then
+/// Driftwall waits for the one choice only the user can make and confirms it automatically.
+private struct SetupCard: View {
+    @Environment(AppController.self) private var app
+
+    var body: some View {
+        let waiting = app.isWaitingForScreenSaverSelection
+        Panel {
+            VStack(alignment: .leading, spacing: Theme.Space.l) {
+                HStack(alignment: .top, spacing: Theme.Space.l) {
+                    Image(systemName: waiting ? "hand.point.up.left.fill" : "lock.display")
+                        .font(.system(size: 34, weight: .light))
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 44)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(waiting ? "One last step in System Settings" : "Set up your lock screen")
+                            .font(.title3.weight(.semibold))
+                        if waiting {
+                            ForEach(Array(app.screenSaverSelectionSteps.enumerated()), id: \.offset) { index, step in
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text("\(index + 1)").font(.callout.weight(.bold)).foregroundStyle(Theme.accent)
+                                    Text(step).font(.callout)
+                                }
+                            }
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("Driftwall will notice automatically when you’re done.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            .padding(.top, 4)
+                        } else {
+                            Text("Driftwall prepares the video and opens System Settings for you. You then make one click there, because macOS only lets you choose the screen saver yourself.")
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Spacer()
+                }
+                HStack {
+                    Spacer()
+                    if waiting {
+                        Button("Open System Settings Again") { MacLockScreenSystem.openScreenSaverSettings() }
+                    } else {
+                        Button {
+                            Task { await app.setUpLockScreen() }
+                        } label: {
+                            Text("Set Up Lock Screen").frame(minWidth: 180)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Shown once the lock screen is fully working.
+private struct ReadyCard: View {
+    @Environment(AppController.self) private var app
+
+    var body: some View {
+        Panel {
+            HStack(spacing: Theme.Space.l) {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 34))
+                    .foregroundStyle(Theme.live)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Your lock screen plays “\(app.lockScreen.config?.title ?? "")”").font(.title3.weight(.semibold))
+                    Text("It plays whenever the screen saver starts and the Mac locks, even when Driftwall is closed. Changes you make below apply automatically.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button {
+                    app.lockNow()
+                } label: {
+                    Label("Lock Now", systemImage: "lock.fill")
+                }
+                .controlSize(.large)
+                .help("Locks your Mac and shows the video right away. Enter your password to come back.")
+            }
+        }
     }
 }

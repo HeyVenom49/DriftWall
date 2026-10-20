@@ -59,6 +59,7 @@ final class AppController {
     @ObservationIgnored private var rawOnBattery = false
     @ObservationIgnored private var rawLowPower = false
     @ObservationIgnored private var bannerTask: Task<Void, Never>?
+    @ObservationIgnored var selectionWatch: Task<Void, Never>?
 
     var settings: AppSettings {
         get { settingsModel.settings }

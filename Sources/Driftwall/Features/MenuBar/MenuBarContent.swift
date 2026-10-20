@@ -57,6 +57,10 @@ struct MenuBarContent: View {
             }
         }
 
+        if app.isLockScreenReady {
+            Divider()
+            Button("Lock Screen Now") { app.lockNow() }
+        }
         Divider()
         Button("Stop Live Wallpaper") { app.clearAllWallpapers() }
             .disabled(!app.engine.hasActiveWallpaper)
