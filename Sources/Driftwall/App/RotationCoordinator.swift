@@ -14,11 +14,12 @@ final class RotationCoordinator {
     @ObservationIgnored private var sequencer: RotationSequencer?
     @ObservationIgnored private let library: LibraryModel
     @ObservationIgnored private let settingsModel: SettingsModel
-    @ObservationIgnored private let apply: (WallpaperID) -> Void
+    /// Applies a wallpaper to the given display (nil = all displays).
+    @ObservationIgnored private let apply: (WallpaperID, String?) -> Void
     /// True while the system is asleep/locked: rotation does not advance when nobody can see it.
     @ObservationIgnored private var systemSuspended = false
 
-    init(library: LibraryModel, settingsModel: SettingsModel, scheduler: RotationScheduler? = nil, apply: @escaping (WallpaperID) -> Void) {
+    init(library: LibraryModel, settingsModel: SettingsModel, scheduler: RotationScheduler? = nil, apply: @escaping (WallpaperID, String?) -> Void) {
         self.library = library
         self.settingsModel = settingsModel
         self.scheduler = scheduler ?? RotationScheduler()
@@ -82,6 +83,12 @@ final class RotationCoordinator {
         reschedule()
     }
 
+    /// Chooses which display the rotation changes (nil = all displays) and shows the current item there.
+    func setTargetDisplay(_ displayID: String?) {
+        update { $0.targetDisplayID = displayID }
+        if isActive, let current = settings.currentWallpaperID { apply(current, displayID) }
+    }
+
     func setShuffle(_ shuffle: Bool) {
         update { $0.shuffle = shuffle }
         sequencer?.shuffle = shuffle
@@ -123,7 +130,7 @@ final class RotationCoordinator {
             return
         }
         update { $0.currentWallpaperID = id }
-        apply(id)
+        apply(id, settings.targetDisplayID)
         if manual { reschedule() } else { nextChange = scheduler.nextFireDate }
     }
 

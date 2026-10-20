@@ -91,8 +91,8 @@ final class AppController {
         importer = MediaImporter(libraryMediaDirectory: paths.mediaDirectory)
         // The coordinator calls back into `apply`, which needs `self`; route through a weak box filled in below.
         let owner = WeakOwner()
-        rotation = RotationCoordinator(library: library, settingsModel: settingsModel) { id in
-            owner.controller?.apply(id, target: nil, fromRotation: true)
+        rotation = RotationCoordinator(library: library, settingsModel: settingsModel) { id, displayID in
+            owner.controller?.apply(id, target: displayID.map { .display(id: $0) } ?? .allDisplays, fromRotation: true)
         }
         owner.controller = self
         log.onChange = { [weak self] in
@@ -206,6 +206,15 @@ final class AppController {
         let states = engine.surfaceStates
         if let main = displays.displays.first(where: \.isMain), let state = states[main.id] { return library.wallpaper(state.wallpaperID) }
         return states.values.sorted { $0.displayID < $1.displayID }.first.flatMap { library.wallpaper($0.wallpaperID) }
+    }
+
+    /// The display the user is working on: the one under the pointer (which is also the display whose
+    /// menu bar or Driftwall window was just clicked), falling back to the main display.
+    var activeDisplay: DisplayInfo? {
+        let pointer = NSEvent.mouseLocation
+        return displays.displays.first { $0.frame.contains(pointer) }
+            ?? displays.displays.first(where: \.isMain)
+            ?? displays.displays.first
     }
 
     func displaysShowing(_ id: WallpaperID) -> [SurfaceState] {

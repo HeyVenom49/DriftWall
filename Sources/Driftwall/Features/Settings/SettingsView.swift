@@ -140,11 +140,12 @@ private struct RotationSettingsPane: View {
                     ForEach(RotationSettings.intervalPresets, id: \.self) { Text(RotationSettings.label(for: $0)).tag($0) }
                 }
                 Toggle("Shuffle", isOn: Binding(get: { rotation.settings.shuffle }, set: { rotation.setShuffle($0) }))
+                RotationDisplayPicker()
                 Toggle("Paused", isOn: Binding(get: { rotation.settings.isPaused }, set: { rotation.setPaused($0) }))
                     .disabled(!rotation.isActive)
             }
             Section {
-                Text("Rotation applies wallpapers to the default display target. It does not advance while the Mac is asleep or locked, and skips playlist items whose video file is missing.")
+                Text("Rotation changes only the display chosen in “Show on”. It does not advance while the Mac is asleep or locked, and skips playlist items whose video file is missing.")
                     .font(.caption).foregroundStyle(.secondary)
                 if app.library.playlists.isEmpty {
                     Text("Create a playlist in the main window to enable rotation.").font(.caption).foregroundStyle(.secondary)

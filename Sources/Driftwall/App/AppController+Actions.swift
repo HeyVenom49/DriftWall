@@ -88,16 +88,18 @@ extension AppController {
     }
 
     /// Without an active playlist, Next/Previous walk through favorites (or the whole library).
+    /// In per-display mode only the display under the pointer changes; in mirror mode every display does.
     private func step(by offset: Int) {
         let pool = (library.favoriteIDs.isEmpty ? library.popularWallpapers.map(\.id) : library.favoriteIDs).filter(library.isAvailable)
         guard !pool.isEmpty else {
             showBanner(.info, "Add some wallpapers first.")
             return
         }
-        let current = currentWallpaper?.id
+        let display = settings.displayMode == .perDisplay ? activeDisplay : nil
+        let current = display.flatMap { engine.surfaceStates[$0.id]?.wallpaperID } ?? currentWallpaper?.id
         let index = current.flatMap { pool.firstIndex(of: $0) } ?? (offset > 0 ? -1 : 0)
         let next = ((index + offset) % pool.count + pool.count) % pool.count
-        apply(pool[next])
+        apply(pool[next], target: display.map { .display(id: $0.id) } ?? .allDisplays)
     }
 
     func startPlaylist(_ playlistID: String) {

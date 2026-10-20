@@ -59,6 +59,8 @@ public struct RotationSettings: Codable, Equatable, Sendable {
     public var shuffle: Bool = false
     public var isPaused: Bool = false
     public var currentWallpaperID: WallpaperID?
+    /// The display the rotation changes, by display UUID. nil means every display.
+    public var targetDisplayID: String?
 
     public init() {}
 
@@ -72,7 +74,7 @@ public struct RotationSettings: Codable, Equatable, Sendable {
         return seconds == 86400 ? "1 day" : "\(seconds / 86400) days"
     }
 
-    private enum CodingKeys: String, CodingKey { case isEnabled, playlistID, interval, shuffle, isPaused, currentWallpaperID }
+    private enum CodingKeys: String, CodingKey { case isEnabled, playlistID, interval, shuffle, isPaused, currentWallpaperID, targetDisplayID }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -82,6 +84,7 @@ public struct RotationSettings: Codable, Equatable, Sendable {
         shuffle = try c.decodeIfPresent(Bool.self, forKey: .shuffle) ?? false
         isPaused = try c.decodeIfPresent(Bool.self, forKey: .isPaused) ?? false
         currentWallpaperID = try c.decodeIfPresent(String.self, forKey: .currentWallpaperID)
+        targetDisplayID = try c.decodeIfPresent(String.self, forKey: .targetDisplayID)
     }
 }
 

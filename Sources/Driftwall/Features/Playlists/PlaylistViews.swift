@@ -138,6 +138,8 @@ struct PlaylistDetailView: View {
                     .fixedSize()
                     Toggle("Shuffle", isOn: Binding(get: { rotation.settings.shuffle }, set: { rotation.setShuffle($0) }))
                         .toggleStyle(.switch)
+                    RotationDisplayPicker()
+                        .fixedSize()
                     Spacer()
                     if isRotating {
                         RotationStatus()
@@ -325,5 +327,24 @@ struct WallpaperPickerSheet: View {
         }
         .padding(24)
         .frame(width: 760, height: 560)
+    }
+}
+
+/// Chooses which display playlist rotation changes.
+struct RotationDisplayPicker: View {
+    @Environment(AppController.self) private var app
+
+    var body: some View {
+        let selected = app.rotation.settings.targetDisplayID
+        Picker("Show on", selection: Binding(get: { selected }, set: { app.rotation.setTargetDisplay($0) })) {
+            Text("All Displays").tag(String?.none)
+            ForEach(app.displays.displays) { display in
+                Text(display.name).tag(String?.some(display.id))
+            }
+            if let selected, app.displays.display(id: selected) == nil {
+                Text("Disconnected display").tag(String?.some(selected))
+            }
+        }
+        .help("The display whose wallpaper the playlist changes")
     }
 }

@@ -90,6 +90,14 @@ enum SmokeTest {
             check(app.settings.displayMode == .perDisplay, "per-display mode after targeting one display")
             expect(await wait { app.engine.surfaceStates[second.id]?.wallpaperID == "sample.neon-grid" && app.engine.surfaceStates[second.id]?.status == .playing }, "second display plays its own wallpaper")
             check(app.engine.activePlayerCount == 2, "two decoders for two different wallpapers")
+            // Next/Previous without a playlist change only the display under the pointer.
+            if let active = app.activeDisplay, let other = app.displays.displays.first(where: { $0.id != active.id }) {
+                let activeBefore = app.engine.surfaceStates[active.id]?.wallpaperID
+                let otherBefore = app.engine.surfaceStates[other.id]?.wallpaperID
+                app.nextWallpaper()
+                expect(await wait { app.engine.surfaceStates[active.id]?.wallpaperID != activeBefore }, "next changes the display under the pointer")
+                check(app.engine.surfaceStates[other.id]?.wallpaperID == otherBefore, "next leaves the other display unchanged")
+            }
             app.settings.displayMode = .mirror
             expect(await wait { Set(app.engine.surfaceStates.values.map(\.wallpaperID)).count == 1 }, "mirror mode shows one wallpaper everywhere")
             app.settings.displayMode = .perDisplay
@@ -109,6 +117,14 @@ enum SmokeTest {
             app.nextWallpaper()
             check(app.rotation.settings.currentWallpaperID == "sample.ember-dusk", "next advances playlist")
             expect(await wait { app.currentWallpaper?.id == "sample.ember-dusk" }, "rotation applied wallpaper to desktop")
+            if let main = app.displays.displays.first(where: \.isMain), let second = app.displays.displays.first(where: { !$0.isMain }) {
+                app.rotation.setTargetDisplay(second.id)
+                let mainBefore = app.engine.surfaceStates[main.id]?.wallpaperID
+                app.nextWallpaper()
+                expect(await wait { app.engine.surfaceStates[second.id]?.wallpaperID == app.rotation.settings.currentWallpaperID }, "rotation targeted at one display changes it")
+                check(app.engine.surfaceStates[main.id]?.wallpaperID == mainBefore, "rotation targeted at one display leaves the others alone")
+                app.rotation.setTargetDisplay(nil)
+            }
             app.rotation.stop()
             check(!app.rotation.isActive && app.rotation.nextChange == nil, "rotation stops cleanly")
         }

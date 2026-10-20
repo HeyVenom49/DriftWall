@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1 — 2026-10-20
+
+### Changed
+- In "Different per Display" mode, Next/Previous (toolbar, menu bar, shortcuts) now change only the
+  display under the pointer instead of every display. "Same on All Displays" mode still changes all.
+- Playlist rotation has a **Show on** choice (All Displays or one display), in the playlist screen and
+  in Settings › Rotation. Rotating a playlist on one display leaves the others alone.
+
 ## 1.0.0 — 2026-10-20
 
 First complete version.
@@ -28,7 +36,7 @@ First complete version.
 - **System integration.** Launch at login (`SMAppService`), optional global hot keys, an optional
   setting that matches the static system wallpaper to a still frame, and a Dock-icon preference.
 - **Diagnostics.** An in-app event log with copy and clear. Nothing leaves the Mac.
-- **Testing.** 69 Swift Testing unit and integration tests, plus a 39-check end-to-end smoke test in
+- **Testing.** 69 Swift Testing unit and integration tests, plus an end-to-end smoke test in
   the packaged app (`--smoke-test`) and a UI snapshot renderer (`--ui-snapshots`).
 - **Build.** `scripts/build_app.sh` assembles and ad-hoc signs `build/Driftwall.app`;
   `scripts/test.sh` runs all checks.

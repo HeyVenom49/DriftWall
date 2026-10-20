@@ -77,6 +77,7 @@ struct PersistenceTests {
         settings.defaultTarget = .display(id: "XYZ")
         settings.rotation.isEnabled = true
         settings.rotation.interval = 300
+        settings.rotation.targetDisplayID = "UUID-EXT"
         try store.saveSettings(settings)
         #expect(try store.loadSettings() == settings)
     }
