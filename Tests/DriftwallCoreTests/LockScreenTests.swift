@@ -199,7 +199,7 @@ struct LockScreenServiceTests {
         try service.installSaver()
         system.selection = .notSelected
         service.refresh(settings: settings, targetWallpaperTitle: "Clip")
-        #expect(service.status == .needsSetup("Select “Driftwall” in System Settings › Screen Saver to finish setup."))
+        #expect(service.status == .needsSetup("Select “Driftwall” as your screen saver to finish setup."))
 
         system.selection = .unknown
         service.refresh(settings: settings, targetWallpaperTitle: "Clip")

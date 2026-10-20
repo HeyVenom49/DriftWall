@@ -94,10 +94,10 @@ public final class LockScreenWallpaperService {
             case .selected:
                 status = .active(title: config.title)
             case .notSelected:
-                status = .needsSetup("Select “Driftwall” in System Settings › Screen Saver to finish setup.")
+                status = .needsSetup("Select “Driftwall” as your screen saver to finish setup.")
             case .unknown:
                 // Never claim success for something that could not be checked.
-                status = .needsSetup("Video prepared. Make sure “Driftwall” is selected in System Settings › Screen Saver.")
+                status = .needsSetup("Video prepared. Make sure “Driftwall” is selected as your screen saver.")
             }
         }
     }

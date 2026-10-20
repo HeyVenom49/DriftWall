@@ -109,7 +109,7 @@ extension AppController {
     func installLockScreenSaver() {
         do {
             try lockScreen.installSaver()
-            showBanner(.success, "Driftwall screen saver installed. Now select it in System Settings › Screen Saver.")
+            showBanner(.success, "Driftwall screen saver installed. \(MacLockScreenSystem.screenSaverSelectionInstructions)")
         } catch {
             showBanner(.error, error.localizedDescription)
         }

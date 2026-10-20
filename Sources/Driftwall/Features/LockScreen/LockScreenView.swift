@@ -206,7 +206,8 @@ private struct SetupPanel: View {
                     if !service.isSaverInstalled { Button("Install") { app.installLockScreenSaver() } }
                 }
                 step(selectionState(service.saverSelection), "“Driftwall” selected as the screen saver",
-                     detail: service.saverSelection == .unknown ? "Driftwall can’t read this setting on your macOS version. Check it in System Settings." : nil) {
+                     detail: service.saverSelection == .selected ? nil : MacLockScreenSystem.screenSaverSelectionInstructions
+                        + (service.saverSelection == .unknown ? " Driftwall can’t read this setting on your macOS version, so check it there." : "")) {
                     Button("Open Screen Saver Settings…") { MacLockScreenSystem.openScreenSaverSettings() }
                 }
                 step(app.passwordDelay == nil ? .unknown : (immediate ? .done : .warning), "Password required immediately after the screen saver starts",
@@ -221,7 +222,7 @@ private struct SetupPanel: View {
                     Button("Test Now…") { confirmTest = true }
                         // With another saver selected, the test would show that saver (e.g. Aerials) instead.
                         .disabled(!prepared || !service.isSaverInstalled || service.saverSelection == .notSelected)
-                        .help(service.saverSelection == .notSelected ? "Select “Driftwall” in System Settings › Screen Saver first." : "Start the screen saver now")
+                        .help(service.saverSelection == .notSelected ? MacLockScreenSystem.screenSaverSelectionInstructions : "Start the screen saver now")
                 }
             }
         }

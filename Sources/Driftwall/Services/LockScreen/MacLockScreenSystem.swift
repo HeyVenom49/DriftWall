@@ -93,8 +93,30 @@ final class MacLockScreenSystem: LockScreenSystem {
 
     // MARK: - User-facing helpers (not part of the testable protocol)
 
+    /// Older macOS versions have a separate Screen Saver pane. On macOS 27 it no longer exists: the
+    /// screen saver is chosen from a sheet inside Wallpaper settings. Detect which one this system has.
+    static var hasSeparateScreenSaverPane: Bool {
+        let extensions = URL(fileURLWithPath: "/System/Library/ExtensionKit/Extensions")
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: extensions.path)) ?? []
+        return names.contains { name in
+            guard name.hasSuffix(".appex") else { return false }
+            let info = extensions.appendingPathComponent(name).appendingPathComponent("Contents/Info.plist")
+            let id = (NSDictionary(contentsOf: info)?["CFBundleIdentifier"] as? String) ?? ""
+            return id == "com.apple.ScreenSaver-Settings.extension"
+        }
+    }
+
+    /// Where the user picks the screen saver, in words that match this macOS version.
+    static var screenSaverSelectionInstructions: String {
+        hasSeparateScreenSaverPane
+            ? "In System Settings › Screen Saver, choose “Driftwall” (under Other)."
+            : "In System Settings › Wallpaper, click “Screen Saver…”, then choose “Driftwall” (under Other)."
+    }
+
     static func openScreenSaverSettings() {
-        open("x-apple.systempreferences:com.apple.ScreenSaver-Settings.extension")
+        open(hasSeparateScreenSaverPane
+             ? "x-apple.systempreferences:com.apple.ScreenSaver-Settings.extension"
+             : "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension")
     }
 
     static func openLockScreenSettings() {
