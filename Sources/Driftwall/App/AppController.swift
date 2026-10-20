@@ -42,6 +42,10 @@ final class AppController {
     @ObservationIgnored let rotation: RotationCoordinator
     let lockScreen: LockScreenWallpaperService
     @ObservationIgnored let lockScreenSystem = MacLockScreenSystem()
+    let aerial: AerialLockScreenService
+    /// Whether the replaced Aerial is chosen as the desktop wallpaper (nil = unknown).
+    var aerialSelectedAsWallpaper: Bool?
+    @ObservationIgnored var aerialWatch: Task<Void, Never>?
     /// "immediate", "5 seconds", … as reported by the system; nil while unknown.
     var passwordDelay: String?
     @ObservationIgnored private let systemEvents = SystemEventMonitor()
@@ -101,6 +105,9 @@ final class AppController {
         }
         lockScreen = LockScreenWallpaperService(directory: paths.supportDirectory.appendingPathComponent("LockScreen", isDirectory: true),
                                                 system: lockScreenSystem)
+        aerial = AerialLockScreenService(reader: AerialCatalogReader(root: AerialCatalogReader.systemRoot),
+                                         workDirectory: paths.supportDirectory.appendingPathComponent("Aerial", isDirectory: true),
+                                         converter: AVAerialVideoConverter(), runner: AppleScriptPrivilegedRunner())
         owner.controller = self
         log.onChange = { [weak self] in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.diagnosticsEpoch &+= 1 } }

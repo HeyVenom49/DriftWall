@@ -78,6 +78,43 @@ How it works and what's limited:
   So the video played on screen while the Mac was locked. Video *inside* the password prompt itself
   remains unsupported, as described above.
 
+### Advanced mode: animated lock screen through Apple's Aerials (opt-in)
+
+Added at the user's explicit request. It **modifies one system-owned file and needs the
+administrator password**. This is an exception to the original "public APIs only" rule, and it's
+limited as follows.
+
+- **Mechanism.** macOS animates its own Aerial wallpapers on the lock screen, including behind the
+  password prompt. Aerial videos live in
+  `/Library/Application Support/com.apple.idleassetsd/Customer/4KSDR240FPS/<asset-UUID>.mov`, described
+  by `entries.json` (root-owned, on the Data volume, not the sealed system volume). Driftwall replaces
+  **one already-downloaded** Aerial video with the user's wallpaper.
+  1. Convert (as the user) to Apple's format: HEVC, exactly 3840×2160 (scaled to fill), looped to at
+     least 120 s. A 12-second 1080p sample took about 60 s and produced 93 MB on this Mac. Export
+     presets never upscale, so the scaling is explicit.
+  2. Back up the original video (as the user; Aerial files are world-readable) and verify its size.
+  3. Run one administrator command through `NSAppleScript … with administrator privileges`, which shows
+     macOS's standard password dialog naming Driftwall:
+     `cp` to a temporary name → `chown root:wheel` → `chmod 644` → atomic `mv`.
+     - Before running, the destination must be exactly `<4KSDR240FPS>/<valid UUID>.mov`.
+     - Every path is shell-quoted and the command is escaped for AppleScript (unit-tested against a real shell).
+  4. Verify the installed file, then write a manifest (`Aerial/manifest.json`) next to the backup.
+- **What's never touched.** `entries.json`, other Aerials, system preferences and the wallpaper store
+  are never written. The Aerial keeps Apple's name and thumbnail in System Settings.
+- **Restore** copies the backup back the same way (one password prompt). Choosing a different Aerial
+  restores the previous one first, so at most one Aerial is ever modified.
+- **macOS may undo it.** A macOS update or `idleassetsd` may put Apple's file back. Driftwall detects
+  this (file size no longer matches) and offers Install Again or Dismiss.
+- **The user still picks the Aerial** in Wallpaper settings; Driftwall can't set the wallpaper.
+  Driftwall detects the choice read-only from the wallpaper store's `Desktop` entries and confirms it.
+- **Tests.**
+  - 13 tests: catalog parsing, path validation and traversal rejection, quoting, a full
+    install → detect → restore cycle with a real shell and real HEVC conversion, cancel, a missing
+    backup, an invalid source, and switching slots.
+  - The production 4K conversion is an opt-in test (`DRIFTWALL_SLOW_TESTS=1`).
+- **Not yet verified on the real system.** The privileged step needs the user's password, so the
+  real lock-screen result is pending the user's test.
+
 ## Lifecycle and power signals
 
 | Signal | API | Status |

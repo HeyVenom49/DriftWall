@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.0 — 2026-10-20
+
+### Added
+- **Advanced: animated lock screen.** Opt-in, behind an explicit confirmation, and it asks for your
+  administrator password. It shows a Driftwall video as one of Apple's Aerial wallpapers, which macOS
+  animates on the lock screen itself.
+  - It converts the video to Apple's format and backs up the original first.
+  - It replaces one Aerial file and verifies the result.
+  - It detects when you choose that Aerial, and when macOS puts its own file back.
+  - One-click Restore.
+  - 13 new tests.
+
+### Pending
+- A real-system test of the Advanced mode, which needs your password.
+
 ## 1.1.0 — 2026-10-20
 
 ### Added

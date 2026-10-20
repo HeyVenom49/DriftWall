@@ -31,6 +31,8 @@ struct LockScreenView: View {
                     sourcePanel(lock)
                 }
 
+                AdvancedAerialPanel()
+
                 DisclosureGroup("Details") {
                     VStack(alignment: .leading, spacing: Theme.Space.l) {
                         CapabilityPanel(capabilities: app.lockScreen.capabilities)
