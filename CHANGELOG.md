@@ -17,8 +17,17 @@
   (`/var` vs `/private/var`). Found by the new tests.
 - Applying to the lock screen on a brand-new library no longer fails while video metadata is still loading.
 
-### Not yet verified
-- Video playback on the real lock screen. It needs the user to select the screen saver and lock the Mac.
+### Verified
+- Video plays while the Mac is locked: confirmed on macOS 27.0.1 from loginwindow and saver logs
+  (see TECHNICAL_LIMITATIONS.md).
+
+### Changed (follow-up)
+- **One-click setup.** Set Up Lock Screen installs the module, prepares the video and opens the right
+  System Settings pane. Driftwall then confirms automatically when you choose it there.
+- **Lock Now**, in the Lock Screen page and the menu bar, locks the Mac and shows the video right away.
+- The module updates itself at launch after an app update; your screen-saver choice is kept.
+- On macOS 27, "Open Screen Saver Settings" opens Wallpaper settings, because the separate Screen Saver
+  pane no longer exists.
 
 ## 1.0.1 — 2026-10-20
 

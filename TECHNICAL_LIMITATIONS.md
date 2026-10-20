@@ -63,12 +63,20 @@ How it works and what's limited:
 - **Stopping playback.** Recent `legacyScreenSaver` versions don't reliably call `stopAnimation`, so the
   module also stops on the `com.apple.screensaver.willstop` notification. That's a widely used
   workaround, not documented API.
-- **Verification so far.**
-  - Driftwall's own side is covered by unit tests, end-to-end checks and the rendered UI.
-  - The module was loaded through its principal class in a test host, and its log showed AVFoundation
-    reached `playing`.
-  - Playback **on the real lock screen** had not yet been confirmed when this was written; it needs the
-    user to select the saver and lock the Mac. See the CHANGELOG for the result.
+- **Selecting the screen saver programmatically isn't possible on macOS 27.** System Events
+  `set current screen saver` fails with error -10006, and the separate Screen Saver settings pane
+  (`com.apple.ScreenSaver-Settings.extension`) no longer exists: the choice now lives in a sheet inside
+  Wallpaper settings. Driftwall detects which layout the system has, opens the right pane, and polls
+  the read-only store until the user's choice appears. The user's single click is the only manual step.
+- **Verified on real hardware**, macOS 27.0.1, 2026-10-20, from system logs:
+  - 19:12:02: after the user selected Driftwall, `legacyScreenSaver` loaded the module.
+  - 19:14:01.213: Test Now started `ScreenSaverEngine`, and loginwindow logged `startScreenLock`
+    and `lockKeybagForScreenLock`.
+  - 19:14:02.367: the module logged `playing “Monochrome Silk” (preview: false)` and kept playing
+    until it was dismissed at 19:14:06.
+
+  So the video played on screen while the Mac was locked. Video *inside* the password prompt itself
+  remains unsupported, as described above.
 
 ## Lifecycle and power signals
 
