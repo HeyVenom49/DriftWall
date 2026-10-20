@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "wallpapers": [
+    { "id": "sample.aurora-drift", "title": "Aurora Drift", "summary": "Translucent ribbons of green and violet light ripple slowly over a starlit polar sky.", "category": "Nature", "tags": ["aurora", "night", "stars", "calm", "green"], "file": "aurora-drift.mov", "featured": true, "popularity": 95, "creator": "Driftwall originals (procedurally generated)" },
+    { "id": "sample.ember-dusk", "title": "Ember Dusk", "summary": "Warm glowing embers drift through a sunset gradient of amber, rose and plum.", "category": "Abstract", "tags": ["sunset", "warm", "gradient", "orange", "soft"], "file": "ember-dusk.mov", "featured": true, "popularity": 88, "creator": "Driftwall originals (procedurally generated)" },
+    { "id": "sample.deep-tide", "title": "Deep Tide", "summary": "Layered ocean swells rolling in opposite directions under a pale surface glow.", "category": "Nature", "tags": ["ocean", "water", "waves", "blue", "calm"], "file": "deep-tide.mov", "featured": false, "popularity": 80, "creator": "Driftwall originals (procedurally generated)" },
+    { "id": "sample.nebula-bloom", "title": "Nebula Bloom", "summary": "Magenta and cobalt gas clouds breathe gently among thousands of twinkling stars.", "category": "Space", "tags": ["space", "stars", "nebula", "purple", "dark"], "file": "nebula-bloom.mov", "featured": true, "popularity": 90, "creator": "Driftwall originals (procedurally generated)" },
+    { "id": "sample.silk-mono", "title": "Monochrome Silk", "summary": "Ninety fine threads weave a flowing grayscale fabric. Minimal and unobtrusive.", "category": "Minimal", "tags": ["minimal", "lines", "grayscale", "dark", "focus"], "file": "silk-mono.mov", "featured": false, "popularity": 72, "creator": "Driftwall originals (procedurally generated)" },
+    { "id": "sample.citrus-haze", "title": "Citrus Haze", "summary": "Bright pastel color fields of lemon, lime and peach blend on a cream canvas.", "category": "Abstract", "tags": ["light", "pastel", "bright", "gradient", "soft"], "file": "citrus-haze.mov", "featured": false, "popularity": 66, "creator": "Driftwall originals (procedurally generated)" },
+    { "id": "sample.neon-grid", "title": "Neon Horizon", "summary": "A retro synthwave sun sets over an endless scrolling neon grid.", "category": "Retro", "tags": ["synthwave", "retro", "grid", "neon", "80s"], "file": "neon-grid.mov", "featured": true, "popularity": 84, "creator": "Driftwall originals (procedurally generated)" },
+    { "id": "sample.rain-lights", "title": "City Rain Lights", "summary": "Out-of-focus city lights fall like raindrops past a misted window.", "category": "Urban", "tags": ["bokeh", "city", "rain", "night", "lights"], "file": "rain-lights.mov", "featured": false, "popularity": 77, "creator": "Driftwall originals (procedurally generated)" }
+  ],
+  "collections": [
+    { "id": "calm", "title": "Calm & Slow", "subtitle": "Gentle motion that stays out of your way", "wallpaperIDs": ["sample.deep-tide", "sample.aurora-drift", "sample.silk-mono", "sample.citrus-haze"] },
+    { "id": "night", "title": "After Dark", "subtitle": "Deep tones for late sessions", "wallpaperIDs": ["sample.nebula-bloom", "sample.rain-lights", "sample.aurora-drift", "sample.neon-grid"] },
+    { "id": "color", "title": "Color Fields", "subtitle": "Soft gradients and glowing light", "wallpaperIDs": ["sample.ember-dusk", "sample.citrus-haze", "sample.nebula-bloom"] }
+  ]
+}
