@@ -52,6 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 SmokeTest.run(AppController.shared)
                 return
             }
+            if let index = CommandLine.arguments.firstIndex(of: "--ui-snapshots"), index + 1 < CommandLine.arguments.count {
+                UISnapshots.run(AppController.shared, outputDirectory: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+                return
+            }
             let app = AppController.shared
             app.start()
             if !app.settings.hasCompletedOnboarding { app.navigation.showOnboarding = true }
@@ -64,7 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if !app.settings.openMainWindowAtLaunch && app.settings.hasCompletedOnboarding {
                 DispatchQueue.main.async {
-                    NSApp.windows.filter { $0.identifier?.rawValue == "main" }.forEach { $0.close() }
+                    NSApp.windows.filter { $0.isMainAppWindow }.forEach { $0.close() }
                 }
             }
         }
@@ -90,7 +94,7 @@ enum WindowOpener {
 
     static func openMain() {
         NSApp.setActivationPolicy(.regular)
-        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) {
+        if let window = NSApp.windows.first(where: { $0.isMainAppWindow }) {
             window.makeKeyAndOrderFront(nil)
         } else {
             openWindowAction?(id: "main")
@@ -134,4 +138,9 @@ struct AppCommands: Commands {
     }
 
     static let shortcutItems: [SidebarItem] = [.home, .explore, .favorites, .recent, .playlists, .library, .displays]
+}
+
+extension NSWindow {
+    /// The SwiftUI `Window(id: "main")` scene's window (SwiftUI may append a suffix to the identifier).
+    var isMainAppWindow: Bool { identifier?.rawValue.hasPrefix("main") ?? false }
 }

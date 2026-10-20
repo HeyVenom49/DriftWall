@@ -14,13 +14,18 @@ struct ThumbnailView: View {
     var body: some View {
         let availability = app.library.availabilityOf(wallpaper.id)
         ZStack {
+            // The image lives in an overlay so its natural size never drives layout: the container decides the size.
             Theme.placeholder
-            if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .transition(.opacity)
-            } else if failed || !availability.isAvailable {
+                .overlay {
+                    if let image {
+                        Image(nsImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .transition(.opacity)
+                    }
+                }
+                .clipped()
+            if image == nil, failed || !availability.isAvailable {
                 Image(systemName: availability.isAvailable ? "photo" : "exclamationmark.triangle")
                     .font(.system(size: 22, weight: .light))
                     .foregroundStyle(.secondary)

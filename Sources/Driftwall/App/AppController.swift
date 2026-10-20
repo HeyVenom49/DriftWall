@@ -267,7 +267,7 @@ final class AppController {
 
     func applyDockPolicy() {
         // Keep a Dock icon while the main window is visible even if hidden by preference, so the window stays reachable.
-        let mainWindowVisible = NSApp.windows.contains { $0.identifier?.rawValue == "main" && $0.isVisible }
+        let mainWindowVisible = NSApp.windows.contains { $0.isMainAppWindow && $0.isVisible }
         NSApp.setActivationPolicy(settings.showDockIcon || mainWindowVisible ? .regular : .accessory)
     }
 

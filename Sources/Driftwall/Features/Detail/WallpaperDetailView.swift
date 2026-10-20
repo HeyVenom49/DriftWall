@@ -88,6 +88,7 @@ struct WallpaperDetailView: View {
             }
             .padding(Theme.Space.page)
         }
+        .background(Theme.background)
         .confirmationDialog("Remove “\(wallpaper.title)” from your library?", isPresented: $confirmRemove) {
             Button("Remove from Library", role: .destructive) { app.removeWallpaper(wallpaper.id) }
         } message: {
@@ -102,8 +103,8 @@ struct WallpaperDetailView: View {
         ZStack {
             ThumbnailView(wallpaper: wallpaper, cornerRadius: Theme.Radius.hero)
             if let player = preview.player {
-                PlayerLayerView(player: player, gravity: .resizeAspect)
-                    .background(Color.black)
+                // No opaque backing: the thumbnail stays visible until the first video frame is drawn.
+                PlayerLayerView(player: player, gravity: .resizeAspectFill)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.hero, style: .continuous))
             }
             if let failure = preview.failure {
