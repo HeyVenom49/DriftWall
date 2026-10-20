@@ -219,7 +219,9 @@ private struct SetupPanel: View {
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Button("Test Now…") { confirmTest = true }
-                        .disabled(!prepared || !service.isSaverInstalled)
+                        // With another saver selected, the test would show that saver (e.g. Aerials) instead.
+                        .disabled(!prepared || !service.isSaverInstalled || service.saverSelection == .notSelected)
+                        .help(service.saverSelection == .notSelected ? "Select “Driftwall” in System Settings › Screen Saver first." : "Start the screen saver now")
                 }
             }
         }

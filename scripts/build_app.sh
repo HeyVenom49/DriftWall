@@ -60,6 +60,14 @@ cat > "$SAVER/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+# Thumbnails shown in System Settings › Screen Saver (90×58 points), cropped from the app icon artwork.
+mkdir -p "$SAVER/Contents/Resources"
+for scale in 1 2; do
+  w=$((90 * scale)); h=$((58 * scale)); suffix=$([ $scale = 2 ] && echo "@2x" || echo "")
+  sips -z $w $w "$GENERATED/AppIcon-1024.png" --out "$BUILD_DIR/thumb.png" >/dev/null
+  sips --cropToHeightWidth $h $w "$BUILD_DIR/thumb.png" --out "$SAVER/Contents/Resources/thumbnail$suffix.png" >/dev/null
+done
+rm -f "$BUILD_DIR/thumb.png"
 codesign --force --sign - --timestamp=none "$SAVER"
 
 echo "▸ Assembling $APP"
