@@ -9,13 +9,41 @@ Built with Swift, SwiftUI, AppKit and AVFoundation. No accounts, no network acce
 > Inspired by the feature set of apps like Wallspace. No Wallspace content, branding or assets are used:
 > the eight included wallpapers are original, procedurally generated videos rendered at build time.
 
-## Requirements
+## Install
+
+No need to build anything:
+
+1. Download **Driftwall-x.y.z.dmg** from the
+   [latest release](https://github.com/HeyVenom49/DriftWall/releases/latest).
+2. Open it and drag **Driftwall** onto **Applications**.
+3. Open Driftwall from Applications.
+
+Driftwall runs on macOS 14 Sonoma or later, on Apple silicon and Intel Macs.
+
+**The first time you open it, macOS asks you to approve it. This is expected.** Driftwall is a free
+app and isn't signed with a paid Apple Developer ID or notarized by Apple, so macOS can't check who
+made it. Approve it once:
+
+- **macOS 15 Sequoia and later:** macOS says *"Driftwall" Not Opened*. Click **Done**, then open
+  **System Settings › Privacy & Security**, scroll down to *"Driftwall" was blocked…* and click
+  **Open Anyway**. Confirm with your password. (Right-click › Open no longer works for this on
+  macOS 15 and later.)
+- **macOS 14 Sonoma:** right-click Driftwall in Applications, choose **Open**, then click **Open**.
+- **Or, on any version, in Terminal:** `xattr -dr com.apple.quarantine /Applications/Driftwall.app`
+  removes the download mark, so Driftwall opens like any other app.
+
+After that it opens normally. Each new version asks once again. Everything else, including the lock screen screen saver and the
+animated lock screen, is set up from inside the app.
+
+## Build from source
+
+### Requirements
 
 - macOS 14 Sonoma or later (developed and tested on macOS 27.0.1, Apple silicon, two displays)
 - Swift 6 toolchain — either Xcode or just the **Command Line Tools** (`xcode-select --install`)
 - ~100 MB free disk space for the build
 
-## Build and run
+### Build and run
 
 ```bash
 scripts/build_app.sh          # builds build/Driftwall.app (release, ad-hoc signed)
@@ -27,6 +55,24 @@ cached afterwards; the folder is git-ignored).
 
 To install, drag `build/Driftwall.app` into `/Applications`. Because the build is only ad-hoc signed,
 macOS may ask for confirmation the first time you open it (right-click › Open).
+
+### Making a release
+
+```bash
+scripts/package_release.sh    # dist/Driftwall-<version>.dmg (universal), .sha256 and release notes
+```
+
+The version comes from the newest entry in `CHANGELOG.md`. Publish it as a GitHub release:
+
+```bash
+gh release create v1.2.1 dist/Driftwall-1.2.1.dmg dist/Driftwall-1.2.1.dmg.sha256 \
+  --title "Driftwall 1.2.1" --notes-file dist/RELEASE_NOTES-1.2.1.md
+```
+
+Releases are ad-hoc signed, which costs nothing. Users approve the app once, as described under
+Install, and the generated release notes explain how. With an Apple Developer ID (paid), setting
+`SIGN_IDENTITY` and `NOTARY_PROFILE` (see the top of the script) would notarize it and remove that
+step.
 
 ### Tests
 
@@ -73,7 +119,7 @@ smoke test takes the place of UI automation.
 | **Import** | Native open panel (files or folders) and drag and drop anywhere on the window. Accepts `.mov`, `.mp4` and `.m4v` and checks them with AVFoundation (playable, has a video track, non-zero duration). Reads metadata, generates thumbnails, rejects duplicates and reports per-file errors. Files are referenced in place through bookmarks that follow moves and renames, or copied into the library (setting) |
 | **Displays** | Arrangement diagram, per-display or same-on-all mode, per-display wallpaper choice and clear, default target, remembered assignments for disconnected displays |
 | **Lock Screen** | Video while the Mac is locked, through the bundled `Driftwall.saver` screen-saver module (public ScreenSaver API). Same-as-desktop or independent wallpaper, preview, compatibility check, setup checklist (module installed, selected, password delay), Test Now, optional still system picture. Honest capability table for the running macOS |
-| **Lock Screen › Advanced** | Opt-in: shows your video as one of Apple's Aerial wallpapers so macOS animates it on the lock screen itself. It needs your administrator password, backs up Apple's original first, and has a one-click Restore. See TECHNICAL_LIMITATIONS.md |
+| **Lock Screen › Animated lock screen** | One click: shows your wallpaper as one of Apple's Aerial wallpapers so macOS animates it on the lock screen itself, even behind the password prompt. No password needed, and it follows your wallpaper. It backs up Apple's original first, puts your video back if macOS downloads Apple's again, and has a one-click Restore. See TECHNICAL_LIMITATIONS.md |
 | **Menu bar** | Current wallpaper, pause state, Pause/Resume, Next/Previous, Recent, Favorites, Playlists (start/pause/stop rotation), Stop, Open, Settings, Quit |
 | **Settings** | General (launch at login, Dock icon, restore on launch), Playback (scaling, desktop icons, hover previews, power behavior, system-wallpaper sync, live status), Displays, Rotation, Library and Cache (sizes, clear), Appearance, Shortcuts (including optional global hot keys), Diagnostics (event log, copy log) |
 

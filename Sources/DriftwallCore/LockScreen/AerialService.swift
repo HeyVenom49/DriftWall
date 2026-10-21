@@ -93,13 +93,14 @@ public struct AVAerialVideoConverter: AerialVideoConverter {
     }
 }
 
-/// Runs one shell command as an administrator (asks the user for their password).
-public protocol PrivilegedRunner: Sendable {
-    func runAsAdministrator(_ shellCommand: String) async throws
+/// Makes macOS's wallpaper processes load the Aerial video again (they keep the old one in memory).
+public protocol AerialWallpaperReloader: Sendable {
+    func reload()
 }
 
 /// "Advanced" lock screen: replaces one downloaded Apple Aerial video with the user's wallpaper so that
-/// macOS itself animates it on the lock screen. Every change is backed up first and can be restored.
+/// macOS itself animates it on the lock screen. The file is in the user's own Aerial store, so no
+/// administrator password is needed. Every change is backed up first and can be restored.
 @MainActor
 @Observable
 public final class AerialLockScreenService {
@@ -111,18 +112,22 @@ public final class AerialLockScreenService {
     @ObservationIgnored public let reader: AerialCatalogReader
     @ObservationIgnored public let workDirectory: URL
     @ObservationIgnored private let converter: AerialVideoConverter
-    @ObservationIgnored private let runner: PrivilegedRunner
+    @ObservationIgnored private let reloader: AerialWallpaperReloader
     @ObservationIgnored private let log: DiagnosticsLog
 
     public var manifestURL: URL { workDirectory.appendingPathComponent("manifest.json") }
     public var backupDirectory: URL { workDirectory.appendingPathComponent("Backup", isDirectory: true) }
+    /// The converted video, kept so it can be put back without converting again when macOS
+    /// re-downloads Apple's file.
+    public var installedCopyURL: URL { workDirectory.appendingPathComponent("installed.mov") }
     var stagingURL: URL { workDirectory.appendingPathComponent("staged.mov") }
 
-    public init(reader: AerialCatalogReader, workDirectory: URL, converter: AerialVideoConverter, runner: PrivilegedRunner, log: DiagnosticsLog = .shared) {
+    public init(reader: AerialCatalogReader, workDirectory: URL, converter: AerialVideoConverter,
+                reloader: AerialWallpaperReloader, log: DiagnosticsLog = .shared) {
         self.reader = reader
         self.workDirectory = workDirectory
         self.converter = converter
-        self.runner = runner
+        self.reloader = reloader
         self.log = log
     }
 
@@ -146,21 +151,20 @@ public final class AerialLockScreenService {
         }
         guard let manifest else { status = .notInstalled; return }
         let file = reader.videoDirectory.appendingPathComponent("\(manifest.slotID).mov")
-        let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
-        status = size == manifest.installedSize ? .installed(manifest) : .replacedByMacOS(manifest)
+        status = Self.size(of: file) == manifest.installedSize ? .installed(manifest) : .replacedByMacOS(manifest)
     }
 
-    /// Converts, backs up, then swaps the Aerial file with one administrator prompt.
-    public func install(wallpaper: Wallpaper, mediaURL: URL, slot: AerialSlot) async throws {
+    /// Converts, backs up, then replaces the Aerial file and reloads the wallpaper.
+    public func install(wallpaper: Wallpaper, mediaURL: URL, slot: AerialSlot, followsWallpaper: Bool = false) async throws {
         guard !isBusy else { return }
         defer { phase = nil; progress = nil }
         refresh()
         guard let current = slots.first(where: { $0.id == slot.id }) else { throw AerialError.invalidSlot }
-        try AerialCommandBuilder.validate(destination: current.fileURL, videoDirectory: reader.videoDirectory)
+        try AerialCatalogReader.validate(destination: current.fileURL, videoDirectory: reader.videoDirectory)
         let fm = FileManager.default
         try fm.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
 
-        // 1. Convert (as the user).
+        // 1. Convert.
         phase = "Converting video to Apple’s Aerial format…"
         progress = 0
         try await converter.convert(mediaURL, to: stagingURL) { value in
@@ -170,8 +174,8 @@ public final class AerialLockScreenService {
         guard converted.codec == "HEVC" else { throw AerialError.conversionFailed("the result is not HEVC.") }
         let stagedSize = Self.size(of: stagingURL) ?? -1
 
-        // 2. Back up Apple's original (as the user; Aerial files are world-readable). If a different slot
-        //    was replaced earlier, that one is restored first so only one Aerial is ever modified.
+        // 2. Back up Apple's original. If a different slot was replaced earlier, that one is restored
+        //    first so only one Aerial is ever modified.
         if let previous = manifest, previous.slotID != current.id {
             try await restore()
         }
@@ -180,52 +184,66 @@ public final class AerialLockScreenService {
         if existingManifest?.slotID != current.id {
             phase = "Backing up Apple’s original video…"
             progress = nil
-            do {
-                _ = try? fm.removeItem(at: backup)
-                try fm.copyItem(at: current.fileURL, to: backup)
-            } catch {
-                throw AerialError.backupFailed(error.localizedDescription)
-            }
-            guard Self.size(of: backup) == current.fileSize else {
-                try? fm.removeItem(at: backup)
-                throw AerialError.backupFailed("the backup copy is incomplete.")
-            }
+            try backUp(current.fileURL, to: backup, expectedSize: current.fileSize)
         }
         let originalSize = existingManifest?.slotID == current.id ? (existingManifest?.originalSize ?? current.fileSize) : current.fileSize
 
-        // 3. Swap the file (administrator).
-        phase = "Waiting for your administrator password…"
-        let command = try AerialCommandBuilder.installCommand(source: stagingURL, destination: current.fileURL, videoDirectory: reader.videoDirectory)
-        try await runner.runAsAdministrator(command)
+        // 3. Replace the file and keep the converted copy for re-applying later.
+        phase = "Replacing the Aerial video…"
+        try await replace(current.fileURL, with: stagingURL, expectedSize: stagedSize, fallback: backup)
+        _ = try? fm.removeItem(at: installedCopyURL)
+        try fm.moveItem(at: stagingURL, to: installedCopyURL)
 
-        // 4. Verify and record.
-        guard Self.size(of: current.fileURL) == stagedSize else {
-            throw AerialError.verificationFailed("the Aerial file doesn’t match the converted video.")
-        }
+        // 4. Record and reload.
         let manifest = AerialInstallManifest(slotID: current.id, slotName: current.name, wallpaperID: wallpaper.id,
                                              wallpaperTitle: wallpaper.title, originalSize: originalSize,
-                                             installedSize: stagedSize, backupPath: backup.path, installedAt: Date())
+                                             installedSize: stagedSize, backupPath: backup.path, installedAt: Date(),
+                                             followsWallpaper: followsWallpaper)
         try write(manifest)
-        try? fm.removeItem(at: stagingURL)
+        reloader.reload()
         log.log(.info, "aerial", "Replaced Aerial “\(current.name)” with “\(wallpaper.title)” (backup at \(backup.path))")
         refresh()
     }
 
-    /// Puts Apple's original video back from the backup (one administrator prompt).
+    /// When macOS has put its own file back (re-downloaded the Aerial), backs that file up as the new
+    /// original and puts Driftwall's converted video back. Returns whether anything was re-applied.
+    @discardableResult
+    public func reapplyIfReplaced() async throws -> Bool {
+        refresh()
+        guard !isBusy, case .replacedByMacOS(var manifest) = status,
+              Self.size(of: installedCopyURL) == manifest.installedSize else { return false }
+        let destination = reader.videoDirectory.appendingPathComponent("\(manifest.slotID).mov")
+        try AerialCatalogReader.validate(destination: destination, videoDirectory: reader.videoDirectory)
+        // A missing file means macOS removed the download; a new file wouldn't carry its download
+        // metadata, so wait until macOS downloads it again.
+        guard let currentSize = Self.size(of: destination) else { return false }
+        phase = "Re-applying your video to the Aerial…"
+        defer { phase = nil }
+        let backup = URL(fileURLWithPath: manifest.backupPath)
+        try backUp(destination, to: backup, expectedSize: currentSize)
+        manifest.originalSize = currentSize
+        try write(manifest)
+        try await replace(destination, with: installedCopyURL, expectedSize: manifest.installedSize, fallback: backup)
+        reloader.reload()
+        log.log(.info, "aerial", "macOS restored Apple’s “\(manifest.slotName)”; re-applied “\(manifest.wallpaperTitle)”")
+        refresh()
+        return true
+    }
+
+    /// Puts Apple's original video back from the backup.
     public func restore() async throws {
         guard let manifest else { throw AerialError.nothingToRestore }
         let backup = URL(fileURLWithPath: manifest.backupPath)
         guard Self.size(of: backup) == manifest.originalSize else { throw AerialError.backupMissing }
         let destination = reader.videoDirectory.appendingPathComponent("\(manifest.slotID).mov")
+        try AerialCatalogReader.validate(destination: destination, videoDirectory: reader.videoDirectory)
         phase = "Restoring Apple’s original video…"
         defer { phase = nil }
-        let command = try AerialCommandBuilder.installCommand(source: backup, destination: destination, videoDirectory: reader.videoDirectory)
-        try await runner.runAsAdministrator(command)
-        guard Self.size(of: destination) == manifest.originalSize else {
-            throw AerialError.verificationFailed("the restored file doesn’t match the backup.")
-        }
+        try await replace(destination, with: backup, expectedSize: manifest.originalSize, fallback: nil)
         try? FileManager.default.removeItem(at: backup)
+        try? FileManager.default.removeItem(at: installedCopyURL)
         try? FileManager.default.removeItem(at: manifestURL)
+        reloader.reload()
         log.log(.info, "aerial", "Restored Apple’s original Aerial “\(manifest.slotName)”")
         refresh()
     }
@@ -234,8 +252,56 @@ public final class AerialLockScreenService {
     public func forgetReplacedInstall() {
         guard case .replacedByMacOS(let manifest) = status else { return }
         try? FileManager.default.removeItem(at: URL(fileURLWithPath: manifest.backupPath))
+        try? FileManager.default.removeItem(at: installedCopyURL)
         try? FileManager.default.removeItem(at: manifestURL)
         refresh()
+    }
+
+    private func backUp(_ file: URL, to backup: URL, expectedSize: Int64) throws {
+        let fm = FileManager.default
+        do {
+            _ = try? fm.removeItem(at: backup)
+            try fm.copyItem(at: file, to: backup)
+        } catch {
+            throw AerialError.backupFailed(error.localizedDescription)
+        }
+        guard Self.size(of: backup) == expectedSize else {
+            try? fm.removeItem(at: backup)
+            throw AerialError.backupFailed("the backup copy is incomplete.")
+        }
+    }
+
+    /// Writes `source` over `destination` and checks the size. If that fails and a `fallback` is
+    /// given, the fallback (Apple's original) is written back so the Aerial is never left half-written.
+    /// The copy runs off the main actor: Aerial videos are hundreds of megabytes.
+    private func replace(_ destination: URL, with source: URL, expectedSize: Int64, fallback: URL?) async throws {
+        do {
+            try await Task.detached(priority: .userInitiated) { try Self.overwriteInPlace(destination, with: source) }.value
+            guard Self.size(of: destination) == expectedSize else {
+                throw AerialError.verificationFailed("the Aerial file doesn’t match the video that was written.")
+            }
+        } catch {
+            if let fallback {
+                _ = await Task.detached(priority: .userInitiated) { try? Self.overwriteInPlace(destination, with: fallback) }.value
+            }
+            if let error = error as? AerialError { throw error }
+            throw AerialError.writeFailed(error.localizedDescription)
+        }
+    }
+
+    /// Rewrites the file's contents without replacing the file itself, so the download metadata macOS
+    /// keeps on it (extended attributes such as the source URL and ETag) stays and macOS keeps treating
+    /// it as its downloaded Aerial instead of downloading it again.
+    nonisolated static func overwriteInPlace(_ destination: URL, with source: URL) throws {
+        let input = try FileHandle(forReadingFrom: source)
+        defer { try? input.close() }
+        let output = try FileHandle(forWritingTo: destination)
+        defer { try? output.close() }
+        try output.truncate(atOffset: 0)
+        while let chunk = try input.read(upToCount: 8 << 20), !chunk.isEmpty {
+            try output.write(contentsOf: chunk)
+        }
+        try output.synchronize()
     }
 
     private func write(_ manifest: AerialInstallManifest) throws {
@@ -245,7 +311,7 @@ public final class AerialLockScreenService {
         try encoder.encode(manifest).write(to: manifestURL, options: .atomic)
     }
 
-    static func size(of url: URL) -> Int64? {
+    nonisolated static func size(of url: URL) -> Int64? {
         (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
     }
 }

@@ -6,3 +6,4 @@ DerivedData/
 .DS_Store
 # Generated at build time by scripts/build_app.sh (original procedural media)
 Resources/Generated/
+dist/

@@ -76,6 +76,11 @@ private struct PlaybackSettings: View {
             }
             Section("System Wallpaper") {
                 Toggle("Match system wallpaper to a frame of the live wallpaper", isOn: setting(app, \.syncSystemWallpaper))
+                    .disabled(app.isAerialOn)
+                if app.isAerialOn {
+                    Text("Off while the animated lock screen is on: a still picture would replace its Aerial wallpaper.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
                 Text("When on, Driftwall replaces each display’s macOS desktop picture with a still frame so the lock screen, Mission Control and your desktop after quitting look consistent. Your previous desktop picture is not restored automatically.")
                     .font(.caption).foregroundStyle(.secondary)
             }

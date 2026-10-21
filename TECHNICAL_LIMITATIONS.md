@@ -80,40 +80,80 @@ How it works and what's limited:
 
 ### Advanced mode: animated lock screen through Apple's Aerials (opt-in)
 
-Added at the user's explicit request. It **modifies one system-owned file and needs the
-administrator password**. This is an exception to the original "public APIs only" rule, and it's
-limited as follows.
+Added at the user's explicit request. It modifies one macOS-managed file (the user's own copy of
+one Aerial video). This is an exception to the original "public APIs only" rule, and it's limited as
+follows.
 
-- **Mechanism.** macOS animates its own Aerial wallpapers on the lock screen, including behind the
-  password prompt. Aerial videos live in
-  `/Library/Application Support/com.apple.idleassetsd/Customer/4KSDR240FPS/<asset-UUID>.mov`, described
-  by `entries.json` (root-owned, on the Data volume, not the sealed system volume). Driftwall replaces
-  **one already-downloaded** Aerial video with the user's wallpaper.
-  1. Convert (as the user) to Apple's format: HEVC, exactly 3840×2160 (scaled to fill), looped to at
-     least 120 s. A 12-second 1080p sample took about 60 s and produced 93 MB on this Mac. Export
-     presets never upscale, so the scaling is explicit.
-  2. Back up the original video (as the user; Aerial files are world-readable) and verify its size.
-  3. Run one administrator command through `NSAppleScript … with administrator privileges`, which shows
-     macOS's standard password dialog naming Driftwall:
-     `cp` to a temporary name → `chown root:wheel` → `chmod 644` → atomic `mv`.
-     - Before running, the destination must be exactly `<4KSDR240FPS>/<valid UUID>.mov`.
-     - Every path is shell-quoted and the command is escaped for AppleScript (unit-tested against a real shell).
-  4. Verify the installed file, then write a manifest (`Aerial/manifest.json`) next to the backup.
-- **What's never touched.** `entries.json`, other Aerials, system preferences and the wallpaper store
-  are never written. The Aerial keeps Apple's name and thumbnail in System Settings.
-- **Restore** copies the backup back the same way (one password prompt). Choosing a different Aerial
-  restores the previous one first, so at most one Aerial is ever modified.
-- **macOS may undo it.** A macOS update or `idleassetsd` may put Apple's file back. Driftwall detects
-  this (file size no longer matches) and offers Install Again or Dismiss.
-- **The user still picks the Aerial** in Wallpaper settings; Driftwall can't set the wallpaper.
-  Driftwall detects the choice read-only from the wallpaper store's `Desktop` entries and confirms it.
-- **Tests.**
-  - 13 tests: catalog parsing, path validation and traversal rejection, quoting, a full
-    install → detect → restore cycle with a real shell and real HEVC conversion, cancel, a missing
-    backup, an invalid source, and switching slots.
-  - The production 4K conversion is an opt-in test (`DRIFTWALL_SLOW_TESTS=1`).
-- **Not yet verified on the real system.** The privileged step needs the user's password, so the
-  real lock-screen result is pending the user's test.
+- **Which file the lock screen plays.** macOS has two Aerial stores:
+  - `/Library/Application Support/com.apple.idleassetsd/Customer/4KSDR240FPS/` (root-owned) is the
+    **screen saver's** store.
+  - `~/Library/Application Support/com.apple.wallpaper/aerials/videos/<asset-UUID>.mov` (owned by
+    the user) is the **wallpaper's** store. `WallpaperAerialsExtension` downloads its own copy here
+    when an Aerial is chosen as wallpaper, and the lock screen plays this copy. The catalog is
+    `aerials/manifest/entries.json`.
+
+  Version 1.2.0 replaced the file in the screen saver's store (with an administrator password). On
+  macOS 27.0.1 the lock screen kept showing Apple's video, because the wallpaper had downloaded and
+  played its own copy. Driftwall now replaces the wallpaper's copy, so **no administrator password is
+  needed**.
+- **Steps.**
+  1. Convert to Apple's format: HEVC, exactly 3840×2160 (scaled to fill), looped to at least 120 s.
+  2. Back up Apple's original to `Driftwall/Aerial/Backup/` and verify its size.
+  3. Write the converted video **over the existing file in place** (truncate and rewrite, same
+     inode). This keeps the extended attributes macOS stores with the download (`SourceURL`,
+     `LastETag`, quarantine), and macOS keeps treating the file as its downloaded Aerial. A
+     write that fails or doesn't verify puts the backup back.
+  4. Keep the converted video as `Driftwall/Aerial/installed.mov` and write `manifest.json`.
+  5. Restart `WallpaperAerialsExtension` and `WallpaperAgent` (`killall`; launchd relaunches them).
+     Without this, the extension keeps playing the video it already loaded. The wallpaper flickers
+     once.
+- **One-click setup.** Driftwall reads which Aerial is chosen as a desktop wallpaper from
+  `~/Library/Application Support/com.apple.wallpaper/Store/Index.plist`.
+  - On macOS 27 this is a choice with provider `com.apple.wallpaper.choice.aerials`, whose
+    `Configuration` is a nested binary plist `{assetID: <UUID>}`. Only IDs from the Aerial catalog
+    or the videos folder are matched, and the screen saver's `Idle` choices are ignored.
+  - If no Aerial is chosen, Driftwall opens Wallpaper settings and polls every 2 s for up to
+    15 minutes. It continues once a chosen Aerial's file exists and its size has stopped changing.
+  - Driftwall can't choose the wallpaper itself: writing the wallpaper store isn't supported, so that
+    one click stays with the user.
+  - Verified on macOS 27.0.1 against a real selection ("Tahoe Day").
+- **Still pictures.** Setting a still macOS desktop picture replaces the Aerial wallpaper, and with
+  it the animated lock screen. While an Aerial is installed, Driftwall never sets one: both
+  still-picture options are turned off and disabled.
+- **Following the wallpaper.** When the lock-screen wallpaper changes, the new one is converted into
+  the same Aerial (about a minute of encoding each time, including with wallpaper rotation). This
+  applies to installs made with one-click setup, or from Options with the current wallpaper.
+- **Only Aerials already downloaded can be used.** Choose the Aerial once in Wallpaper settings so
+  macOS downloads it, then install over it. Driftwall never creates a new file in that folder: a new
+  file wouldn't have macOS's download metadata.
+  - The list comes from the `videos` folder itself.
+  - Names come from `aerials/manifest/entries.json`, or from the screen saver's catalog when that
+    file is missing.
+  - On a Mac where no Aerial was ever chosen as wallpaper, the folder doesn't exist. Driftwall shows
+    how to download one and waits until the file stops growing.
+- **macOS downloading its file again.** When macOS downloads Apple's video again (for example after
+  an update or a catalog change), Driftwall backs that download up as the new original and writes the
+  kept converted video back. It checks at launch and every 5 minutes. If macOS deleted the file
+  instead, Driftwall waits until macOS downloads it again.
+- **Restore** writes the backup back in place, restarts the wallpaper processes, and deletes the
+  backup, the kept copy and the manifest. Choosing a different Aerial restores the previous one
+  first, so at most one Aerial is ever modified.
+- **What's never touched.** The catalog, other Aerials, the screen saver's store, system preferences
+  and the wallpaper selection. The Aerial keeps Apple's name and thumbnail in System Settings.
+- **Disk use.** The backup and the kept converted copy are each about 0.5 GB.
+- **Verified on macOS 27.0.1, 2026-10-21.**
+  - Writing the converted video in place over the wallpaper store's copy of "Sequoia Sunrise", then
+    restarting `WallpaperAerialsExtension` and `WallpaperAgent`: the lock screen played the user's
+    video, including behind the password prompt.
+  - After the restart, macOS didn't download its own file again.
+- **Tests.** 12 tests cover:
+  - catalog parsing, path validation and traversal rejection;
+  - a full install → detect → restore cycle with a real HEVC conversion, including that macOS's
+    download metadata is kept and the wallpaper is reloaded;
+  - putting the video back after macOS downloads its file again, and waiting when the file is gone;
+  - a missing backup, an invalid source, and switching slots.
+
+  The production 4K conversion is an opt-in test (`DRIFTWALL_SLOW_TESTS=1`).
 
 ## Lifecycle and power signals
 

@@ -19,6 +19,9 @@ public struct AerialInstallManifest: Codable, Equatable, Sendable {
     public var installedSize: Int64
     public var backupPath: String
     public var installedAt: Date
+    /// Whether the Aerial follows the lock-screen wallpaper when it changes (one-click setup). nil for
+    /// installs made before this existed, which are treated as a fixed choice.
+    public var followsWallpaper: Bool?
 }
 
 public enum AerialStatus: Equatable, Sendable {
@@ -38,8 +41,7 @@ public enum AerialError: LocalizedError, Equatable {
     case unsafePath(String)
     case conversionFailed(String)
     case backupFailed(String)
-    case cancelled
-    case privilegedStepFailed(String)
+    case writeFailed(String)
     case verificationFailed(String)
     case nothingToRestore
     case backupMissing
@@ -47,79 +49,81 @@ public enum AerialError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .storeUnavailable(let why): return "Apple’s Aerial videos aren’t available on this Mac: \(why)"
-        case .invalidSlot: return "That Aerial isn’t downloaded on this Mac. Choose another one."
-        case .unsafePath(let path): return "Refusing to write outside Apple’s Aerial folder (\(path))."
+        case .invalidSlot: return "That Aerial isn’t downloaded on this Mac. Choose it once in Wallpaper settings so macOS downloads it, then try again."
+        case .unsafePath(let path): return "Refusing to write outside the Aerial video folder (\(path))."
         case .conversionFailed(let why): return "The video couldn’t be converted to Apple’s Aerial format: \(why)"
         case .backupFailed(let why): return "Apple’s original video couldn’t be backed up, so nothing was changed: \(why)"
-        case .cancelled: return "Cancelled. Nothing was changed."
-        case .privilegedStepFailed(let why): return "macOS didn’t allow the change: \(why)"
+        case .writeFailed(let why): return "The Aerial video couldn’t be replaced: \(why)"
         case .verificationFailed(let why): return "The change couldn’t be verified: \(why)"
         case .nothingToRestore: return "No Aerial has been replaced by Driftwall."
-        case .backupMissing: return "The backup of Apple’s original video is missing. macOS can re-download the original: remove the file in Wallpaper settings or wait for the next Aerial update."
+        case .backupMissing: return "The backup of Apple’s original video is missing. macOS downloads the original again if you delete the Aerial’s video in ~/Library/Application Support/com.apple.wallpaper/aerials/videos."
         }
     }
 }
 
-/// Reads Apple's Aerial catalog (`Customer/entries.json`) and the downloaded videos. Read-only.
+/// Reads the per-user Aerial wallpaper store that `WallpaperAerialsExtension` plays from:
+/// `<root>/videos/<id>.mov` (downloaded videos) and `<root>/manifest/entries.json` (names). Read-only.
+///
+/// This is not the screen saver's store in `/Library/Application Support/com.apple.idleassetsd`: on
+/// macOS 27 the wallpaper (and so the lock screen) downloads and plays its own copy from here.
 public struct AerialCatalogReader: Sendable {
-    public var root: URL   // /Library/Application Support/com.apple.idleassetsd/Customer
-    public static let videoFolder = "4KSDR240FPS"
+    public var root: URL   // ~/Library/Application Support/com.apple.wallpaper/aerials
+    /// Other catalogs used only for names, for when the wallpaper's own catalog hasn't been downloaded.
+    public var fallbackCatalogURLs: [URL]
 
-    public init(root: URL) { self.root = root }
+    public init(root: URL, fallbackCatalogURLs: [URL] = []) {
+        self.root = root
+        self.fallbackCatalogURLs = fallbackCatalogURLs
+    }
 
-    public static let systemRoot = URL(fileURLWithPath: "/Library/Application Support/com.apple.idleassetsd/Customer", isDirectory: true)
+    public static var userRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.apple.wallpaper/aerials", isDirectory: true)
+    }
 
-    public var videoDirectory: URL { root.appendingPathComponent(Self.videoFolder, isDirectory: true) }
+    /// The screen saver's catalog. It lists the same Aerials, so it can name them.
+    public static let systemCatalogURL = URL(fileURLWithPath: "/Library/Application Support/com.apple.idleassetsd/Customer/entries.json")
 
+    public var catalogURL: URL { root.appendingPathComponent("manifest/entries.json") }
+    public var videoDirectory: URL { root.appendingPathComponent("videos", isDirectory: true) }
+
+    /// Every downloaded Aerial video. The list comes from the video folder itself, so a missing or
+    /// unreadable catalog only costs the names, never the Aerials. No folder (nothing downloaded for
+    /// this user yet) is an empty list, not an error.
     public func availableSlots() throws -> [AerialSlot] {
-        let entriesURL = root.appendingPathComponent("entries.json")
-        guard let data = try? Data(contentsOf: entriesURL) else {
-            throw AerialError.storeUnavailable("its catalog (entries.json) was not found.")
-        }
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let assets = json["assets"] as? [[String: Any]] else {
-            throw AerialError.storeUnavailable("its catalog has an unexpected format.")
-        }
+        let files = (try? FileManager.default.contentsOfDirectory(at: videoDirectory, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey])) ?? []
+        let names = assetNames()
         var slots: [AerialSlot] = []
-        for asset in assets {
-            guard let id = asset["id"] as? String, Self.isValidAssetID(id) else { continue }
-            let file = videoDirectory.appendingPathComponent("\(id).mov")
-            guard let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) else { continue }
-            let name = (asset["accessibilityLabel"] as? String) ?? (asset["localizedNameKey"] as? String) ?? id
-            slots.append(AerialSlot(id: id, name: name, fileURL: file, fileSize: size))
+        for file in files where file.pathExtension == "mov" {
+            let id = file.deletingPathExtension().lastPathComponent
+            guard Self.isValidAssetID(id),
+                  let values = try? file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+                  values.isRegularFile == true, let size = values.fileSize, size > 0 else { continue }
+            let name = names[id] ?? "Aerial \(id.prefix(8))"
+            slots.append(AerialSlot(id: id, name: name, fileURL: file, fileSize: Int64(size)))
         }
         return slots.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Asset ID → display name from the first catalog that names it.
+    public func assetNames() -> [String: String] {
+        var names: [String: String] = [:]
+        for url in [catalogURL] + fallbackCatalogURLs {
+            guard let data = try? Data(contentsOf: url),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let assets = json["assets"] as? [[String: Any]] else { continue }
+            for asset in assets {
+                guard let id = asset["id"] as? String, names[id] == nil,
+                      let name = (asset["accessibilityLabel"] as? String) ?? (asset["localizedNameKey"] as? String) else { continue }
+                names[id] = name
+            }
+        }
+        return names
     }
 
     /// Apple asset IDs are uppercase UUIDs. Anything else is rejected before it can reach a file path.
     public static func isValidAssetID(_ id: String) -> Bool {
         UUID(uuidString: id) != nil && id.count == 36 && id.allSatisfy { $0.isHexDigit || $0 == "-" }
-    }
-}
-
-/// Builds the one privileged shell command. Kept pure so quoting and path checks are unit-tested.
-public enum AerialCommandBuilder {
-    /// Shell single-quote quoting: safe for any byte except NUL.
-    public static func shellQuote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    /// Escapes a string for use inside an AppleScript string literal.
-    public static func appleScriptLiteral(_ value: String) -> String {
-        "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
-    }
-
-    /// Copies `source` over the Aerial file `destination` atomically, owned by root like Apple's files.
-    public static func installCommand(source: URL, destination: URL, videoDirectory: URL) throws -> String {
-        try validate(destination: destination, videoDirectory: videoDirectory)
-        let dest = destination.standardizedFileURL.path
-        let temp = dest + ".driftwall-incoming"
-        return [
-            "/bin/cp -f \(shellQuote(source.path)) \(shellQuote(temp))",
-            "/usr/sbin/chown root:wheel \(shellQuote(temp))",
-            "/bin/chmod 644 \(shellQuote(temp))",
-            "/bin/mv -f \(shellQuote(temp)) \(shellQuote(dest))",
-        ].joined(separator: " && ")
     }
 
     /// The destination must be exactly `<videoDirectory>/<valid asset UUID>.mov`.
@@ -127,12 +131,55 @@ public enum AerialCommandBuilder {
         let dest = destination.standardizedFileURL
         let name = dest.deletingPathExtension().lastPathComponent
         guard dest.deletingLastPathComponent().path == videoDirectory.standardizedFileURL.path,
-              dest.pathExtension == "mov", AerialCatalogReader.isValidAssetID(name) else {
+              dest.pathExtension == "mov", isValidAssetID(name) else {
             throw AerialError.unsafePath(dest.path)
         }
     }
+}
 
-    public static func appleScript(forShellCommand command: String) -> String {
-        "do shell script \(appleScriptLiteral(command)) with administrator privileges"
+/// Reads which Aerials are chosen as a *desktop* wallpaper (what macOS animates on the lock screen)
+/// from the wallpaper store's `Index.plist`. The format isn't documented, so this only looks for the
+/// given asset IDs anywhere under a "Desktop" entry, including inside nested property lists.
+public enum AerialWallpaperStore {
+    public static var indexURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
+    }
+
+    /// The IDs from `known` chosen as a desktop wallpaper on any display or Space. nil when the store
+    /// can't be read.
+    public static func selectedAssetIDs(among known: Set<String>, indexURL: URL = indexURL) -> Set<String>? {
+        guard let data = try? Data(contentsOf: indexURL),
+              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) else { return nil }
+        return selectedAssetIDs(inIndex: root, among: known)
+    }
+
+    public static func selectedAssetIDs(inIndex root: Any, among known: Set<String>) -> Set<String> {
+        var found = Set<String>()
+        collect(root, known: known, inDesktop: false, depth: 0, into: &found)
+        return found
+    }
+
+    private static func collect(_ value: Any, known: Set<String>, inDesktop: Bool, depth: Int, into found: inout Set<String>) {
+        guard depth < 24 else { return }
+        switch value {
+        case let string as String:
+            if inDesktop, let id = known.first(where: { string.caseInsensitiveCompare($0) == .orderedSame }) { found.insert(id) }
+        case let data as Data:
+            guard inDesktop else { return }
+            if let nested = try? PropertyListSerialization.propertyList(from: data, format: nil) {
+                collect(nested, known: known, inDesktop: true, depth: depth + 1, into: &found)
+            } else {
+                for id in known where data.range(of: Data(id.utf8)) != nil { found.insert(id) }
+            }
+        case let dict as [String: Any]:
+            for (key, child) in dict where key != "Idle" { // "Idle" holds the screen saver, not the wallpaper
+                collect(child, known: known, inDesktop: inDesktop || key == "Desktop", depth: depth + 1, into: &found)
+            }
+        case let array as [Any]:
+            for child in array { collect(child, known: known, inDesktop: inDesktop, depth: depth + 1, into: &found) }
+        default:
+            break
+        }
     }
 }

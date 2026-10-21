@@ -24,10 +24,18 @@ final class MacLockScreenSystem: LockScreenSystem {
     }
 
     var isSaverInstalled: Bool {
-        guard let installed = Bundle(url: installedSaverURL)?.infoDictionary?["CFBundleVersion"] as? String else { return false }
+        guard let installed = Self.bundleVersion(at: installedSaverURL) else { return false }
         // Up to date only if it matches the module shipped in this build.
-        let bundled = bundledSaverURL.flatMap { Bundle(url: $0)?.infoDictionary?["CFBundleVersion"] as? String }
+        let bundled = bundledSaverURL.flatMap(Self.bundleVersion(at:))
         return bundled == nil || bundled == installed
+    }
+
+    /// Reads Info.plist from disk every time. `Bundle(url:)` caches bundles by path for the life of the
+    /// process, so after the module is replaced it would keep reporting the old version, and setup would
+    /// keep asking to install a module that is already installed.
+    private static func bundleVersion(at bundleURL: URL) -> String? {
+        let info = bundleURL.appendingPathComponent("Contents/Info.plist")
+        return NSDictionary(contentsOf: info)?["CFBundleVersion"] as? String
     }
 
     func installSaver() throws {
@@ -39,10 +47,26 @@ final class MacLockScreenSystem: LockScreenSystem {
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let staging = folder.appendingPathComponent(".Driftwall-\(UUID().uuidString).saver")
         try fm.copyItem(at: source, to: staging)
+        Self.removeQuarantine(staging)
         if fm.fileExists(atPath: installedSaverURL.path) {
             _ = try fm.replaceItemAt(installedSaverURL, withItemAt: staging)
         } else {
             try fm.moveItem(at: staging, to: installedSaverURL)
+        }
+    }
+
+    /// When Driftwall was downloaded, its files carry the quarantine attribute and the copy keeps it.
+    /// The user already approved Driftwall when opening it, but macOS assesses a quarantined screen
+    /// saver again when it loads it, and refuses one that isn't notarized. Driftwall installed this
+    /// copy itself, so it removes the attribute from every file in it.
+    private static func removeQuarantine(_ bundle: URL) {
+        let fm = FileManager.default
+        var urls = [bundle]
+        if let enumerator = fm.enumerator(at: bundle, includingPropertiesForKeys: nil) {
+            urls += enumerator.compactMap { $0 as? URL }
+        }
+        for url in urls {
+            removexattr(url.path, "com.apple.quarantine", XATTR_NOFOLLOW)
         }
     }
 

@@ -152,7 +152,8 @@ extension AppController {
         }
 
         var stillPictureError: String?
-        if settings.lockScreen.setsStillSystemPicture, let url = library.mediaURL(for: id) {
+        // A still picture would replace the Aerial wallpaper that plays the animated lock screen.
+        if settings.lockScreen.setsStillSystemPicture, !isAerialOn, let url = library.mediaURL(for: id) {
             do {
                 let frame = try await thumbnails.posterFrame(for: id, mediaURL: url, duration: wallpaper.duration)
                 try lockScreen.setStillSystemPicture(frame)
@@ -162,6 +163,7 @@ extension AppController {
             }
         }
         refreshLockScreen()
+        followWallpaperOnAerial()
         if !quiet {
             if let stillPictureError {
                 showBanner(.error, stillPictureError)
@@ -176,6 +178,7 @@ extension AppController {
 
     /// In "same as desktop" mode the lock screen follows the main display's wallpaper.
     func followDesktopOnLockScreen() {
+        followWallpaperOnAerial()
         guard settings.lockScreen.isEnabled, settings.lockScreen.useDesktopWallpaper,
               let target = lockScreenTargetID, target != lockScreen.config?.wallpaperID else { return }
         Task { await applyLockScreen(quiet: true) }
@@ -192,6 +195,7 @@ extension AppController {
     }
 
     func setLockScreenStillPicture(_ enabled: Bool) {
+        guard !(enabled && isAerialOn) else { return }
         settings.lockScreen.setsStillSystemPicture = enabled
         if enabled, lockScreen.config != nil { Task { await applyLockScreen() } }
     }

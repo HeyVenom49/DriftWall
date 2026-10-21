@@ -46,6 +46,10 @@ final class AppController {
     /// Whether the replaced Aerial is chosen as the desktop wallpaper (nil = unknown).
     var aerialSelectedAsWallpaper: Bool?
     @ObservationIgnored var aerialWatch: Task<Void, Never>?
+    @ObservationIgnored var aerialKeeper: Task<Void, Never>?
+    /// Where one-click animated lock-screen setup is waiting for macOS (nil when it isn't running).
+    var aerialSetupStep: AerialSetupStep?
+    @ObservationIgnored var aerialSetupTask: Task<Void, Never>?
     /// "immediate", "5 seconds", … as reported by the system; nil while unknown.
     var passwordDelay: String?
     @ObservationIgnored private let systemEvents = SystemEventMonitor()
@@ -105,9 +109,10 @@ final class AppController {
         }
         lockScreen = LockScreenWallpaperService(directory: paths.supportDirectory.appendingPathComponent("LockScreen", isDirectory: true),
                                                 system: lockScreenSystem)
-        aerial = AerialLockScreenService(reader: AerialCatalogReader(root: AerialCatalogReader.systemRoot),
+        aerial = AerialLockScreenService(reader: AerialCatalogReader(root: AerialCatalogReader.userRoot,
+                                                                     fallbackCatalogURLs: [AerialCatalogReader.systemCatalogURL]),
                                          workDirectory: paths.supportDirectory.appendingPathComponent("Aerial", isDirectory: true),
-                                         converter: AVAerialVideoConverter(), runner: AppleScriptPrivilegedRunner())
+                                         converter: AVAerialVideoConverter(), reloader: KillallWallpaperReloader())
         owner.controller = self
         log.onChange = { [weak self] in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.diagnosticsEpoch &+= 1 } }
@@ -124,6 +129,7 @@ final class AppController {
         library.load()
         loadCatalog()
         Task { await backfillMetadata() }
+        startAerialKeeper()
 
         engine.gravity = settings.videoGravity
         engine.showDesktopIcons = settings.showDesktopIcons
@@ -327,6 +333,8 @@ final class AppController {
     func syncSystemWallpaperFrames() {
         // When the lock screen owns the system picture, the desktop must not overwrite it.
         guard settings.syncSystemWallpaper, !(settings.lockScreen.isEnabled && settings.lockScreen.setsStillSystemPicture) else { return }
+        // A still picture would replace the Aerial wallpaper that plays the animated lock screen.
+        guard !isAerialOn else { return }
         for state in engine.surfaceStates.values {
             guard let wallpaper = library.wallpaper(state.wallpaperID), let url = library.mediaURL(for: wallpaper.id),
                   let display = displays.display(id: state.displayID), let screen = displays.screen(for: display) else { continue }

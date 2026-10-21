@@ -160,6 +160,11 @@ struct LockScreenView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Also use a still frame as the macOS system picture",
                        isOn: Binding(get: { lock.setsStillSystemPicture }, set: { app.setLockScreenStillPicture($0) }))
+                    .disabled(app.isAerialOn)
+                if app.isAerialOn {
+                    Text("Off while the animated lock screen is on: a still picture would replace its Aerial wallpaper.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
                 Text("macOS shows the system picture behind the password prompt and login window, where video can’t play. The system picture is shared with the desktop (hidden behind Driftwall’s live wallpaper), and your previous picture is not restored automatically.")
                     .font(.caption).foregroundStyle(.secondary)
             }

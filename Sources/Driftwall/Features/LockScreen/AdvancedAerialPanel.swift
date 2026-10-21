@@ -1,14 +1,14 @@
 import DriftwallCore
 import SwiftUI
 
-/// Advanced mode: plays a Driftwall video as an Apple Aerial, which macOS animates on the lock screen
-/// itself (including behind the password prompt). Requires the user's administrator password.
+/// Animated lock screen: plays the wallpaper as one of Apple's Aerials, which macOS animates on the
+/// lock screen itself (including behind the password prompt). One button sets it up; the manual
+/// choices are under Options.
 struct AdvancedAerialPanel: View {
     @Environment(AppController.self) private var app
-    @State private var expanded = false
+    @State private var showOptions = false
     @State private var wallpaperID: WallpaperID?
     @State private var slotID: String?
-    @State private var confirmInstall = false
     @State private var confirmRestore = false
 
     var body: some View {
@@ -20,139 +20,166 @@ struct AdvancedAerialPanel: View {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
                             Text("Animated lock screen").font(.headline)
-                            Badge(text: "ADVANCED")
+                            Badge(text: "BETA")
                         }
-                        Text("Shows your video as one of Apple’s Aerial wallpapers, which macOS animates on the lock screen itself, even behind the password prompt.")
+                        Text("Plays your wallpaper on the lock screen itself, even behind the password prompt, by showing it as one of Apple’s Aerial wallpapers.")
                             .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
-                    Spacer()
-                    Button(expanded ? "Hide" : "Show") { withAnimation { expanded.toggle() } }
                 }
-
-                if expanded || service.isBusy || isInstalled(service.status) {
-                    Divider()
-                    content(service)
+                Divider()
+                if let step = app.aerialSetupStep {
+                    setupProgress(step)
+                } else if let phase = service.phase {
+                    busy(phase, progress: service.progress)
+                } else {
+                    switch service.status {
+                    case .installed(let manifest), .replacedByMacOS(let manifest):
+                        onView(manifest, replaced: service.status != .installed(manifest))
+                    case .notInstalled, .unavailable:
+                        offView()
+                    }
+                }
+                if app.aerialSetupStep == nil, !service.isBusy {
+                    DisclosureGroup("Options", isExpanded: $showOptions) { options(service) }
+                        .font(.callout)
                 }
             }
         }
         .onAppear {
             app.refreshAerial()
-            if wallpaperID == nil { wallpaperID = app.lockScreenTargetID ?? app.currentWallpaper?.id }
+            if wallpaperID == nil { wallpaperID = app.aerialTargetID }
         }
-        .confirmationDialog("Replace an Apple Aerial with your video?", isPresented: $confirmInstall) {
-            Button("Continue (asks for your password)") { startInstall() }
+        .confirmationDialog("Turn off the animated lock screen?", isPresented: $confirmRestore) {
+            Button("Turn Off") { Task { await app.restoreAerial() } }
         } message: {
-            Text("""
-            Driftwall will convert your video, back up Apple’s original “\(selectedSlot?.name ?? "Aerial")” video, and then replace it. macOS asks for your administrator password.
-
-            Only that one video file changes. You can restore Apple’s original at any time, and a macOS update may put it back on its own.
-            """)
-        }
-        .confirmationDialog("Restore Apple’s original Aerial?", isPresented: $confirmRestore) {
-            Button("Restore (asks for your password)") { Task { await app.restoreAerial() } }
+            Text("Apple’s original Aerial video comes back. Your wallpaper choice in System Settings stays as it is.")
         }
     }
 
-    @ViewBuilder
-    private func content(_ service: AerialLockScreenService) -> some View {
-        switch service.status {
-        case .unavailable(let why):
-            Label(why, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-        case .installed(let manifest):
-            installedView(manifest)
-        case .replacedByMacOS(let manifest):
-            VStack(alignment: .leading, spacing: 8) {
-                Label("macOS put Apple’s “\(manifest.slotName)” video back (probably after an update). Your lock screen shows Apple’s Aerial again.",
+    // MARK: - States
+
+    private func offView() -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            HStack {
+                Button("Turn On Animated Lock Screen") { app.turnOnAnimatedLockScreen() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(app.aerialTargetID == nil)
+                if let title = app.library.wallpaper(app.aerialTargetID)?.title {
+                    Text("Plays “\(title)”").font(.callout).foregroundStyle(.secondary)
+                }
+            }
+            Text(app.aerialTargetID == nil
+                 ? "Set a live wallpaper first. The animated lock screen plays your current wallpaper."
+                 : "If no Aerial is your wallpaper yet, Driftwall opens Wallpaper settings: click any Aerial and Driftwall does the rest. Converting takes about a minute.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func setupProgress(_ step: AerialSetupStep) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                switch step {
+                case .choosingAerial:
+                    Text("In Wallpaper settings, click any Aerial (for example one under “Landscape”).")
+                        .font(.callout.weight(.medium))
+                case .downloading(let name):
+                    Text("macOS is downloading “\(name)”…").font(.callout.weight(.medium))
+                }
+            }
+            Text(step == .choosingAerial
+                 ? "Driftwall continues by itself as soon as you’ve clicked one."
+                 : "Aerials are a few hundred megabytes. Driftwall continues by itself when the download finishes.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                if step == .choosingAerial {
+                    Button("Open Wallpaper Settings") { AerialWallpaperSelection.openWallpaperSettings() }
+                }
+                Button("Cancel") { app.cancelAnimatedLockScreenSetup() }
+            }
+        }
+    }
+
+    private func busy(_ phase: String, progress: Double?) -> some View {
+        HStack(spacing: 8) {
+            if let progress {
+                ProgressView(value: progress).frame(width: 160)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            Text(phase).font(.callout).foregroundStyle(.secondary)
+        }
+    }
+
+    private func onView(_ manifest: AerialInstallManifest, replaced: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if replaced {
+                Label("macOS put Apple’s “\(manifest.slotName)” video back. Driftwall puts yours back automatically once macOS has finished downloading it.",
                       systemImage: "arrow.uturn.backward.circle.fill")
                     .foregroundStyle(.orange)
-                HStack {
-                    Button("Install Again…") { confirmInstall = true }.disabled(selectedSlot == nil)
-                    Button("Dismiss") { service.forgetReplacedInstall() }
+            } else if app.aerialSelectedAsWallpaper == false {
+                Label("“\(manifest.slotName)” isn’t your wallpaper right now, so the lock screen doesn’t play your video.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Button("Choose “\(manifest.slotName)” in Wallpaper Settings") {
+                    AerialWallpaperSelection.openWallpaperSettings()
+                    app.watchForAerialSelection()
                 }
-            }
-            chooser(service)
-        case .notInstalled:
-            chooser(service)
-        }
-        if let phase = service.phase {
-            HStack(spacing: 8) {
-                if let progress = service.progress {
-                    ProgressView(value: progress).frame(width: 160)
-                } else {
-                    ProgressView().controlSize(.small)
-                }
-                Text(phase).font(.callout).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func installedView(_ manifest: AerialInstallManifest) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Apple’s “\(manifest.slotName)” Aerial now plays “\(manifest.wallpaperTitle)”.", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(Theme.live)
-            if app.aerialSelectedAsWallpaper == true {
-                Text("It’s your wallpaper, so it plays on the lock screen.").font(.callout).foregroundStyle(.secondary)
             } else {
-                HStack(spacing: 8) {
-                    Text("Last step: in Wallpaper settings, choose the “\(manifest.slotName)” Aerial.")
-                        .font(.callout)
-                    Button("Open Wallpaper Settings") {
-                        AerialWallpaperSelection.openWallpaperSettings()
-                        app.watchForAerialSelection()
-                    }
-                }
+                Label("On: your lock screen plays “\(manifest.wallpaperTitle)”.", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(Theme.live)
             }
-            Button("Restore Apple’s Original…") { confirmRestore = true }
-                .disabled(app.aerial.isBusy)
-            if expanded {
-                Divider()
-                Text("Use a different video:").font(.callout.weight(.medium))
-                chooser(app.aerial)
+            Text(manifest.followsWallpaper == true
+                 ? "It follows your lock-screen wallpaper: when that changes, Driftwall updates it in the background."
+                 : "Shown as Apple’s “\(manifest.slotName)” Aerial.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                if manifest.followsWallpaper == true, let target = app.aerialTargetID, target != manifest.wallpaperID {
+                    Button("Update Now") { app.followWallpaperOnAerial() }
+                }
+                Button("Turn Off…") { confirmRestore = true }
             }
         }
     }
 
-    private func chooser(_ service: AerialLockScreenService) -> some View {
+    // MARK: - Options
+
+    private func options(_ service: AerialLockScreenService) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             Picker("Video", selection: $wallpaperID) {
                 ForEach(app.library.search(SearchQuery(sort: .title)).filter { app.library.isAvailable($0.id) }) { wallpaper in
                     Text(wallpaper.title).tag(WallpaperID?.some(wallpaper.id))
                 }
             }
-            Picker("Replace Apple’s Aerial", selection: Binding(get: { slotID ?? service.slots.first?.id }, set: { slotID = $0 })) {
-                ForEach(service.slots) { slot in
-                    Text("\(slot.name) (\(slot.fileSize.formattedBytes))").tag(String?.some(slot.id))
+            if service.slots.isEmpty {
+                Text("No Aerial is downloaded yet. Turn On downloads one for you, or choose any Aerial in Wallpaper settings.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Picker("Apple Aerial to use", selection: Binding(get: { slotID ?? service.manifest?.slotID ?? service.slots.first?.id }, set: { slotID = $0 })) {
+                    ForEach(service.slots) { slot in
+                        Text(slot.name).tag(String?.some(slot.id))
+                    }
                 }
             }
-            if service.slots.isEmpty, case .notInstalled = service.status {
-                Text("No Aerials are downloaded on this Mac yet. Choose any Aerial in Wallpaper settings once so macOS downloads it, then come back.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Text("Only Aerials already downloaded on this Mac can be used. Pick one you don’t mind seeing replaced; its name and thumbnail in System Settings stay Apple’s.")
-                .font(.caption).foregroundStyle(.secondary)
+            Text("Choosing a video other than your lock-screen wallpaper keeps that video until you change it here. Its name and thumbnail in System Settings stay Apple’s.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
-                Button("Install as Aerial…") { confirmInstall = true }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(wallpaperID == nil || selectedSlot == nil || service.isBusy)
+                Button("Install") {
+                    guard let wallpaperID, let slot = selectedSlot else { return }
+                    let follows = wallpaperID == app.aerialTargetID
+                    Task { await app.installAerial(wallpaperID: wallpaperID, slot: slot, followsWallpaper: follows) }
+                }
+                .disabled(wallpaperID == nil || selectedSlot == nil)
             }
         }
+        .padding(.top, 6)
     }
 
     private var selectedSlot: AerialSlot? {
         let slots = app.aerial.slots
-        if let slotID { return slots.first { $0.id == slotID } }
-        return slots.first
-    }
-
-    private func isInstalled(_ status: AerialStatus) -> Bool {
-        if case .installed = status { return true }
-        if case .replacedByMacOS = status { return true }
-        return false
-    }
-
-    private func startInstall() {
-        guard let wallpaperID, let slot = selectedSlot else { return }
-        Task { await app.installAerial(wallpaperID: wallpaperID, slot: slot) }
+        let id = slotID ?? app.aerial.manifest?.slotID
+        return slots.first { $0.id == id } ?? slots.first
     }
 }

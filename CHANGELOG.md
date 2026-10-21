@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.2.1 — 2026-10-21
+
+### Added
+- **Download instead of building.** `scripts/package_release.sh` makes a universal (Apple silicon and
+  Intel) `Driftwall-<version>.dmg` to attach to a GitHub release. It notarizes when a Developer ID is
+  configured. The README explains installing it and the one-time approval macOS asks for.
+- The screen saver Driftwall installs no longer keeps the download quarantine of a downloaded copy of
+  Driftwall, so macOS doesn't refuse to load it.
+
+### Fixed
+- **Advanced lock screen showed Apple's Aerial instead of your video.** On macOS 27 the wallpaper
+  (and so the lock screen) plays its own copy of each Aerial, kept in
+  `~/Library/Application Support/com.apple.wallpaper/aerials/videos`. Driftwall was replacing the
+  screen saver's copy in `/Library/Application Support/com.apple.idleassetsd`, which the lock screen
+  doesn't use. Driftwall now replaces the wallpaper's copy and reloads the wallpaper. Verified on
+  macOS 27.0.1.
+- **Setup kept asking to install the screen saver** although it was installed and selected. The
+  installed module's version was read through `Bundle`, which caches by path for the life of the app,
+  so after the module was replaced it kept reporting the old version until Driftwall was restarted.
+  The version is now read from disk each time.
+- **Advanced mode on a Mac that never used an Aerial wallpaper.** It reported that Apple's Aerials
+  weren't available when the wallpaper's Aerial catalog was missing. It now lists every downloaded
+  Aerial video even without that catalog, taking names from the screen saver's catalog. When nothing
+  is downloaded yet, it explains how to download one, opens Wallpaper settings and notices when
+  the download finishes.
+
+### Changed
+- **One-click animated lock screen.** "Turn On Animated Lock Screen" plays your current lock-screen
+  wallpaper (or the desktop wallpaper).
+  - If an Aerial is already your wallpaper, it's used straight away.
+  - Otherwise Driftwall opens Wallpaper settings, waits for you to click any Aerial and for macOS to
+    download it, then finishes by itself.
+  - The manual video and Aerial choice moved to Options.
+- **Follows your wallpaper.** When the lock-screen wallpaper changes, Driftwall converts the new one
+  into the same Aerial in the background.
+- **Still pictures no longer replace the Aerial.** "Also use a still frame as the macOS system
+  picture" and "Match system wallpaper to a frame" replaced the Aerial wallpaper with a still image,
+  which silently turned the animated lock screen off. While it's on, both options are turned off and
+  unavailable.
+- Advanced mode no longer asks for your administrator password: the file it changes is in your own
+  Library.
+- The file is written over in place, so macOS keeps treating it as its downloaded Aerial.
+- If macOS downloads Apple's video again, Driftwall puts yours back automatically. It checks at
+  launch and every 5 minutes.
+
 ## 1.2.0 — 2026-10-20
 
 ### Added

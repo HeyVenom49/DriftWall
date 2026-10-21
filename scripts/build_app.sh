@@ -5,6 +5,12 @@
 #
 # Output: build/Driftwall.app (ad-hoc signed, for running on this Mac).
 #
+# Optional environment (used by scripts/package_release.sh):
+#   UNIVERSAL=1           build for Apple silicon and Intel (default: this Mac's architecture)
+#   SIGN_IDENTITY="..."   a "Developer ID Application: …" identity; signs with the hardened runtime
+#                         and a secure timestamp, as notarization requires (default: ad-hoc)
+#   VERSION=x.y.z         version string (default: the newest version in CHANGELOG.md)
+#
 # Why a script: SwiftPM produces a bare executable, not an .app bundle. A bundle is required for the
 # Info.plist, app icon, bundled resources, launch-at-login (SMAppService) and normal Dock/menu-bar
 # behaviour, so this script assembles one around the SwiftPM-built binary.
@@ -15,16 +21,23 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT/build"
 APP="$BUILD_DIR/Driftwall.app"
 GENERATED="$ROOT/Resources/Generated"
-VERSION="1.0.0"
+VERSION="${VERSION:-$(grep -m1 -oE '^## [0-9]+\.[0-9]+\.[0-9]+' "$ROOT/CHANGELOG.md" | cut -c4- || true)}"
+VERSION="${VERSION:-1.0.0}"
+SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+ARCH_FLAGS=()
+if [ "${UNIVERSAL:-0}" = "1" ]; then ARCH_FLAGS=(--arch arm64 --arch x86_64); fi
 BUILD_NUMBER="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
 
 cd "$ROOT"
 source "$ROOT/scripts/sdk_env.sh"
 
 echo "▸ Building ($CONFIG) with SDK: ${SDKROOT:-default}"
-swift build -c "$CONFIG" --product Driftwall
+swift build -c "$CONFIG" --product Driftwall ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
+BIN_DIR="$(swift build -c "$CONFIG" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)"
+# Copy the app binary out now: the generator build below writes to the same products folder.
+APP_BIN="$BUILD_DIR/Driftwall.bin"
+mkdir -p "$BUILD_DIR" && cp "$BIN_DIR/Driftwall" "$APP_BIN"
 swift build -c release --product SampleMediaGenerator
-BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
 GEN_BIN="$(swift build -c release --show-bin-path)/SampleMediaGenerator"
 
 echo "▸ Rendering original sample wallpapers (cached after the first run)"
@@ -68,12 +81,19 @@ for scale in 1 2; do
   sips --cropToHeightWidth $h $w "$BUILD_DIR/thumb.png" --out "$SAVER/Contents/Resources/thumbnail$suffix.png" >/dev/null
 done
 rm -f "$BUILD_DIR/thumb.png"
-codesign --force --sign - --timestamp=none "$SAVER"
+sign() {
+  if [ "$SIGN_IDENTITY" = "-" ]; then
+    codesign --force --sign - --timestamp=none "$1"
+  else
+    codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$1"
+  fi
+}
+sign "$SAVER"
 
 echo "▸ Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Samples"
-cp "$BIN_DIR/Driftwall" "$APP/Contents/MacOS/Driftwall"
+mv "$APP_BIN" "$APP/Contents/MacOS/Driftwall"
 cp "$ROOT/Resources/Catalog.json" "$APP/Contents/Resources/"
 cp "$GENERATED"/Samples/*.mov "$APP/Contents/Resources/Samples/"
 cp -R "$SAVER" "$APP/Contents/Resources/Driftwall.saver"
@@ -114,8 +134,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "▸ Signing (ad-hoc)"
-codesign --force --sign - --timestamp=none "$APP"
+echo "▸ Signing ($([ "$SIGN_IDENTITY" = "-" ] && echo ad-hoc || echo "$SIGN_IDENTITY"))"
+sign "$APP"
 codesign --verify --strict "$APP"
 
 SIZE="$(du -sh "$APP" | cut -f1)"
