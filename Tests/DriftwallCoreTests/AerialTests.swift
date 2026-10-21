@@ -95,6 +95,26 @@ struct AerialWallpaperStoreTests {
         #expect(AerialWallpaperStore.selectedAssetIDs(inIndex: root, among: [sunrise]).isEmpty)
     }
 
+    @Test func reportsEachDisplaySeparately() throws {
+        let builtIn = "37D8832A-2D66-02CA-B9F7-8F30A301B230", external = "653240F3-BB73-4DAB-A1F9-D0C13D00CFCF"
+        let aerial = try PropertyListSerialization.data(fromPropertyList: ["assetID": sunrise], format: .binary, options: 0)
+        let image = try PropertyListSerialization.data(fromPropertyList: ["type": "imageFile", "url": ["relative": "file:///a.png"]], format: .binary, options: 0)
+        func desktop(_ configuration: Data, _ provider: String) -> [String: Any] {
+            ["Desktop": ["Content": ["Choices": [["Provider": provider, "Configuration": configuration]]]]]
+        }
+        let perDisplay: [String: Any] = [
+            "AllSpacesAndDisplays": ["Idle": ["Content": ["Choices": []]], "Type": "idle"],
+            "Displays": [builtIn: desktop(aerial, "com.apple.wallpaper.choice.aerials"),
+                         external: desktop(image, "com.apple.wallpaper.choice.image")],
+        ]
+        #expect(AerialWallpaperStore.displays(showing: sunrise, among: [builtIn, external], inIndex: perDisplay) == [builtIn])
+
+        // One choice for all displays applies to every display, whatever the per-display entries say.
+        var allDisplays = perDisplay
+        allDisplays["AllSpacesAndDisplays"] = desktop(aerial, "com.apple.wallpaper.choice.aerials")
+        #expect(AerialWallpaperStore.displays(showing: sunrise, among: [builtIn, external], inIndex: allDisplays) == [builtIn, external])
+    }
+
     @Test func unreadableStoreIsUnknown() {
         #expect(AerialWallpaperStore.selectedAssetIDs(among: [sunrise], indexURL: URL(fileURLWithPath: "/nonexistent-driftwall-test/Index.plist")) == nil)
     }
@@ -108,11 +128,15 @@ struct AerialFixture {
     let reader: AerialCatalogReader
     let work: URL
     let video: URL
+    /// Stands in for the screen saver's store, which may hold Apple's original of the same Aerial.
+    let copies: URL
 
     init() throws {
         let base = try Fixtures.temporaryDirectory().appendingPathComponent("Driftwall's test store", isDirectory: true)
         root = base.appendingPathComponent("aerials", isDirectory: true)
-        reader = AerialCatalogReader(root: root)
+        copies = base.appendingPathComponent("4KSDR240FPS", isDirectory: true)
+        try FileManager.default.createDirectory(at: copies, withIntermediateDirectories: true)
+        reader = AerialCatalogReader(root: root, originalCopyDirectories: [copies])
         work = base.appendingPathComponent("Work", isDirectory: true)
         try FileManager.default.createDirectory(at: reader.videoDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: reader.catalogURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -136,6 +160,24 @@ struct AerialFixture {
     func setDownloadMetadata(_ id: String, _ value: String) throws {
         let result = setxattr(file(id).path, "LastETag", value, value.utf8.count, 0, 0)
         if result != 0 { throw CocoaError(.fileWriteUnknown) }
+    }
+
+    /// Records the file's real ETag, as macOS does when it downloads an Aerial.
+    func markAsDownloaded(_ id: String) throws -> Data {
+        let contents = try Data(contentsOf: file(id))
+        try setDownloadMetadata(id, "\"\(try AerialChecksum.etag(of: file(id), multipart: false))\"")
+        return contents
+    }
+
+    /// Changes the Aerial's contents in place (keeping its download metadata), as an edit by hand would.
+    func tamper(_ id: String) throws {
+        let handle = try FileHandle(forWritingTo: file(id))
+        try handle.write(contentsOf: Data([0x00, 0x11, 0x22]))
+        try handle.close()
+    }
+
+    func putCopy(_ data: Data, of id: String) throws {
+        try data.write(to: copies.appendingPathComponent("\(id).mov"))
     }
 
     func downloadMetadata(_ id: String) -> String? {
@@ -178,8 +220,8 @@ struct AerialServiceTests {
         let service = makeService(fixture, reloader: reloader)
         service.refresh()
         let slot = try #require(service.slots.first { $0.id == AerialFixture.antarctica })
-        let original = try Data(contentsOf: fixture.file(AerialFixture.antarctica))
-        try fixture.setDownloadMetadata(AerialFixture.antarctica, "\"etag-1\"")
+        let original = try fixture.markAsDownloaded(AerialFixture.antarctica)
+        let etag = try #require(fixture.downloadMetadata(AerialFixture.antarctica))
 
         try await service.install(wallpaper: wallpaper, mediaURL: fixture.video, slot: slot)
 
@@ -193,14 +235,14 @@ struct AerialServiceTests {
         #expect(replaced.duration >= 3) // short clip was looped
         #expect(replaced.pixelWidth == 640 && replaced.pixelHeight == 360) // upscaled to the exact render size
         #expect(try Data(contentsOf: fixture.file(AerialFixture.london)).count == 7000) // other Aerials untouched
-        #expect(fixture.downloadMetadata(AerialFixture.antarctica) == "\"etag-1\"") // written in place, so macOS keeps it
+        #expect(fixture.downloadMetadata(AerialFixture.antarctica) == etag) // written in place, so macOS keeps it
         #expect(try Data(contentsOf: service.installedCopyURL) == Data(contentsOf: fixture.file(AerialFixture.antarctica)))
         #expect(reloader.count == 1)
 
         try await service.restore()
         #expect(service.status == .notInstalled)
         #expect(try Data(contentsOf: fixture.file(AerialFixture.antarctica)) == original)
-        #expect(fixture.downloadMetadata(AerialFixture.antarctica) == "\"etag-1\"")
+        #expect(fixture.downloadMetadata(AerialFixture.antarctica) == etag)
         #expect(!FileManager.default.fileExists(atPath: manifest.backupPath))
         #expect(!FileManager.default.fileExists(atPath: service.installedCopyURL.path))
         #expect(service.manifest == nil)
@@ -218,6 +260,124 @@ struct AerialServiceTests {
         guard case .replacedByMacOS = service.status else { Issue.record("expected replacedByMacOS, got \(service.status)"); return }
         service.forgetReplacedInstall()
         #expect(service.status == .notInstalled)
+    }
+
+    @Test func refusesToBackUpAnAerialThatIsNoLongerApplesOriginal() async throws {
+        let fixture = try AerialFixture()
+        let service = makeService(fixture)
+        _ = try fixture.markAsDownloaded(AerialFixture.antarctica)
+        try fixture.tamper(AerialFixture.antarctica) // e.g. replaced by hand earlier
+        let tampered = try Data(contentsOf: fixture.file(AerialFixture.antarctica))
+        service.refresh()
+        let slot = try #require(service.slots.first { $0.id == AerialFixture.antarctica })
+        await #expect(throws: AerialError.originalModified("Antarctica")) {
+            try await service.install(wallpaper: wallpaper, mediaURL: fixture.video, slot: slot)
+        }
+        #expect(try Data(contentsOf: fixture.file(AerialFixture.antarctica)) == tampered) // untouched
+        #expect(service.manifest == nil)
+    }
+
+    @Test func backsUpAVerifiedCopyWhenTheAerialWasChanged() async throws {
+        let fixture = try AerialFixture()
+        let service = makeService(fixture)
+        let original = try fixture.markAsDownloaded(AerialFixture.antarctica)
+        try fixture.tamper(AerialFixture.antarctica)
+        try fixture.putCopy(Data(repeating: 0x99, count: 5000), of: AerialFixture.antarctica) // not the original
+        try fixture.putCopy(original, of: AerialFixture.antarctica)                            // the original
+        service.refresh()
+        try await service.install(wallpaper: wallpaper, mediaURL: fixture.video,
+                                  slot: try #require(service.slots.first { $0.id == AerialFixture.antarctica }))
+        #expect(try Data(contentsOf: URL(fileURLWithPath: try #require(service.manifest).backupPath)) == original)
+        try await service.restore()
+        #expect(try Data(contentsOf: fixture.file(AerialFixture.antarctica)) == original)
+    }
+
+    @Test func restoreUsesAVerifiedCopyWhenTheBackupIsWrong() async throws {
+        let fixture = try AerialFixture()
+        let service = makeService(fixture)
+        let original = try fixture.markAsDownloaded(AerialFixture.london)
+        service.refresh()
+        try await service.install(wallpaper: wallpaper, mediaURL: fixture.video, slot: try #require(service.slots.first { $0.id == AerialFixture.london }))
+        let backup = URL(fileURLWithPath: try #require(service.manifest).backupPath)
+        try Data(repeating: 0xEE, count: original.count).write(to: backup) // right size, wrong video
+
+        await #expect(throws: AerialError.backupMissing) { try await service.restore() } // no verified original anywhere
+        try fixture.putCopy(original, of: AerialFixture.london)
+        try await service.restore()
+        #expect(try Data(contentsOf: fixture.file(AerialFixture.london)) == original)
+        #expect(service.manifest == nil)
+    }
+
+    @Test func reinstallingReplacesAWrongBackupWithAVerifiedCopy() async throws {
+        let fixture = try AerialFixture()
+        let service = makeService(fixture)
+        let original = try fixture.markAsDownloaded(AerialFixture.london)
+        service.refresh()
+        let slot = try #require(service.slots.first { $0.id == AerialFixture.london })
+        try await service.install(wallpaper: wallpaper, mediaURL: fixture.video, slot: slot)
+        let backup = URL(fileURLWithPath: try #require(service.manifest).backupPath)
+        try Data(repeating: 0xEE, count: 123).write(to: backup)
+        try fixture.putCopy(original, of: AerialFixture.london)
+        service.refresh()
+        try await service.install(wallpaper: wallpaper, mediaURL: fixture.video, slot: try #require(service.slots.first { $0.id == AerialFixture.london }))
+        #expect(try Data(contentsOf: backup) == original)
+        #expect(service.manifest?.originalSize == Int64(original.count))
+    }
+
+    @Test func findsAndRepairsAerialsChangedOutsideDriftwall() async throws {
+        let fixture = try AerialFixture()
+        let reloader = CountingReloader()
+        let service = makeService(fixture, reloader: reloader)
+        let antarctica = try fixture.markAsDownloaded(AerialFixture.antarctica)
+        _ = try fixture.markAsDownloaded(AerialFixture.london)
+        #expect(await service.findModifiedAerials().isEmpty)
+
+        try fixture.tamper(AerialFixture.antarctica)
+        try fixture.tamper(AerialFixture.london)
+        try fixture.putCopy(antarctica, of: AerialFixture.antarctica) // only Antarctica has an original copy
+        let modified = await service.findModifiedAerials()
+        #expect(Set(modified.map(\.name)) == ["Antarctica", "London"])
+
+        let antarcticaSlot = try #require(modified.first { $0.id == AerialFixture.antarctica })
+        #expect(try await service.repairModifiedAerial(antarcticaSlot) == .restoredFromCopy)
+        #expect(try Data(contentsOf: fixture.file(AerialFixture.antarctica)) == antarctica)
+
+        let londonSlot = try #require(modified.first { $0.id == AerialFixture.london })
+        #expect(try await service.repairModifiedAerial(londonSlot) == .willRedownload)
+        #expect(!FileManager.default.fileExists(atPath: fixture.file(AerialFixture.london).path))
+        #expect(await service.findModifiedAerials().isEmpty)
+        #expect(reloader.count == 2)
+    }
+
+    @Test func theAerialDriftwallReplacedIsNotReportedAsModified() async throws {
+        let fixture = try AerialFixture()
+        let service = makeService(fixture)
+        _ = try fixture.markAsDownloaded(AerialFixture.london)
+        service.refresh()
+        try await service.install(wallpaper: wallpaper, mediaURL: fixture.video, slot: try #require(service.slots.first { $0.id == AerialFixture.london }))
+        #expect(await service.findModifiedAerials().isEmpty)
+    }
+
+    @Test func removeAndRedownloadIsTheLastResort() async throws {
+        let fixture = try AerialFixture()
+        let service = makeService(fixture)
+        service.refresh()
+        try await service.install(wallpaper: wallpaper, mediaURL: fixture.video, slot: try #require(service.slots.first { $0.id == AerialFixture.london }))
+        try service.removeAndRedownload()
+        #expect(!FileManager.default.fileExists(atPath: fixture.file(AerialFixture.london).path))
+        #expect(service.manifest == nil)
+        #expect(!FileManager.default.fileExists(atPath: service.installedCopyURL.path))
+    }
+
+    @Test func checksumMatchesAppleMultipartFormat() throws {
+        // Multipart ETags are the MD5 of the 64 MiB parts' MD5s plus "-<parts>"; a file below 64 MiB has one part.
+        let file = try Fixtures.temporaryDirectory().appendingPathComponent("a.mov")
+        try Data("hello".utf8).write(to: file)
+        #expect(try AerialChecksum.etag(of: file, multipart: false) == "5D41402ABC4B2A76B9719D911017C592") // md5("hello")
+        let multipart = try AerialChecksum.etag(of: file, multipart: true)
+        #expect(multipart.hasSuffix("-1"))
+        #expect(AerialChecksum.matches(file, expectedETag: multipart.lowercased()))
+        #expect(!AerialChecksum.matches(file, expectedETag: "5D41402ABC4B2A76B9719D911017C592-2")) // wrong part count
     }
 
     @Test func recordsWhetherTheAerialFollowsTheWallpaper() async throws {

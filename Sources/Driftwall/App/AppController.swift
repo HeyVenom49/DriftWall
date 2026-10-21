@@ -43,8 +43,14 @@ final class AppController {
     let lockScreen: LockScreenWallpaperService
     @ObservationIgnored let lockScreenSystem = MacLockScreenSystem()
     let aerial: AerialLockScreenService
-    /// Whether the replaced Aerial is chosen as the desktop wallpaper (nil = unknown).
-    var aerialSelectedAsWallpaper: Bool?
+    /// Connected displays whose wallpaper isn't the replaced Aerial, so their lock screen doesn't play
+    /// the video. nil when unknown (nothing installed, or the wallpaper store can't be read).
+    var aerialMissingDisplays: [DisplayInfo]?
+    /// Downloaded Aerials that are no longer Apple's original (changed outside Driftwall's install).
+    /// nil until checked.
+    var aerialModifiedSlots: [AerialSlot]?
+    /// Restore found no copy of Apple's original; the panel offers removing it so macOS downloads it.
+    var aerialRestoreNeedsDownload = false
     @ObservationIgnored var aerialWatch: Task<Void, Never>?
     @ObservationIgnored var aerialKeeper: Task<Void, Never>?
     /// Where one-click animated lock-screen setup is waiting for macOS (nil when it isn't running).
@@ -110,7 +116,8 @@ final class AppController {
         lockScreen = LockScreenWallpaperService(directory: paths.supportDirectory.appendingPathComponent("LockScreen", isDirectory: true),
                                                 system: lockScreenSystem)
         aerial = AerialLockScreenService(reader: AerialCatalogReader(root: AerialCatalogReader.userRoot,
-                                                                     fallbackCatalogURLs: [AerialCatalogReader.systemCatalogURL]),
+                                                                     fallbackCatalogURLs: [AerialCatalogReader.systemCatalogURL],
+                                                                     originalCopyDirectories: [AerialCatalogReader.systemVideoDirectory]),
                                          workDirectory: paths.supportDirectory.appendingPathComponent("Aerial", isDirectory: true),
                                          converter: AVAerialVideoConverter(), reloader: KillallWallpaperReloader())
         owner.controller = self
@@ -143,7 +150,10 @@ final class AppController {
         systemEvents.onChange = { [weak self] reason, active in self?.handleSystemEvent(reason, active) }
         systemEvents.start()
 
-        displays.onChange = { [weak self] _ in self?.reconcileDesktop() }
+        displays.onChange = { [weak self] _ in
+            self?.reconcileDesktop()
+            self?.refreshAerial()
+        }
         settingsModel.onChange = { [weak self] old, new in self?.settingsChanged(from: old, to: new) }
 
         if settings.resumeOnLaunch {

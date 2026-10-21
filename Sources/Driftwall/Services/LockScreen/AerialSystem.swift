@@ -19,12 +19,6 @@ struct KillallWallpaperReloader: AerialWallpaperReloader {
 }
 
 enum AerialWallpaperSelection {
-    /// Read-only check of the wallpaper store: is the given Aerial chosen as a *desktop* wallpaper
-    /// (which is what macOS animates on the lock screen)? Returns nil when the store can't be read.
-    static func isSelectedAsWallpaper(_ assetID: String) -> Bool? {
-        AerialWallpaperStore.selectedAssetIDs(among: [assetID]).map { $0.contains(assetID) }
-    }
-
     static func openWallpaperSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension") {
             NSWorkspace.shared.open(url)

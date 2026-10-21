@@ -180,13 +180,26 @@ public final class AerialLockScreenService {
             try await restore()
         }
         let backup = backupDirectory.appendingPathComponent("\(current.id).mov")
-        let existingManifest = manifest
-        if existingManifest?.slotID != current.id {
+        let originalSize: Int64
+        phase = "Checking Apple’s original video…"
+        progress = nil
+        if let existing = manifest, existing.slotID == current.id {
+            // Replacing the video again: the backup made the first time is still the original.
+            originalSize = await verifiedBackupSize(for: existing) ?? existing.originalSize
+        } else {
+            // Never back up a file that isn't Apple's original (for example one changed by hand or by an
+            // earlier version): a restore would then put the wrong video back. Use a verified copy instead.
+            var original = current.fileURL
+            if let expected = AerialChecksum.recordedETag(of: current.fileURL) {
+                guard let verified = await firstMatching([current.fileURL] + originalCopies(of: current.id), expectedETag: expected) else {
+                    throw AerialError.originalModified(current.name)
+                }
+                original = verified
+            }
             phase = "Backing up Apple’s original video…"
-            progress = nil
-            try backUp(current.fileURL, to: backup, expectedSize: current.fileSize)
+            originalSize = Self.size(of: original) ?? current.fileSize
+            try backUp(original, to: backup, expectedSize: originalSize)
         }
-        let originalSize = existingManifest?.slotID == current.id ? (existingManifest?.originalSize ?? current.fileSize) : current.fileSize
 
         // 3. Replace the file and keep the converted copy for re-applying later.
         phase = "Replacing the Aerial video…"
@@ -220,9 +233,14 @@ public final class AerialLockScreenService {
         phase = "Re-applying your video to the Aerial…"
         defer { phase = nil }
         let backup = URL(fileURLWithPath: manifest.backupPath)
-        try backUp(destination, to: backup, expectedSize: currentSize)
-        manifest.originalSize = currentSize
-        try write(manifest)
+        let isOriginal = await Task.detached(priority: .utility) { AerialChecksum.isAppleOriginal(destination) }.value
+        if isOriginal != false {
+            try backUp(destination, to: backup, expectedSize: currentSize)
+            manifest.originalSize = currentSize
+            try write(manifest)
+        } else {
+            log.log(.warning, "aerial", "“\(manifest.slotName)” changed but isn’t Apple’s original; keeping the existing backup")
+        }
         try await replace(destination, with: installedCopyURL, expectedSize: manifest.installedSize, fallback: backup)
         reloader.reload()
         log.log(.info, "aerial", "macOS restored Apple’s “\(manifest.slotName)”; re-applied “\(manifest.wallpaperTitle)”")
@@ -230,21 +248,45 @@ public final class AerialLockScreenService {
         return true
     }
 
-    /// Puts Apple's original video back from the backup.
+    /// Puts Apple's original video back. Uses the backup when it is verifiably Apple's original, or
+    /// another verified copy of the same Aerial if the backup isn't (or is missing).
     public func restore() async throws {
         guard let manifest else { throw AerialError.nothingToRestore }
         let backup = URL(fileURLWithPath: manifest.backupPath)
-        guard Self.size(of: backup) == manifest.originalSize else { throw AerialError.backupMissing }
         let destination = reader.videoDirectory.appendingPathComponent("\(manifest.slotID).mov")
         try AerialCatalogReader.validate(destination: destination, videoDirectory: reader.videoDirectory)
         phase = "Restoring Apple’s original video…"
         defer { phase = nil }
-        try await replace(destination, with: backup, expectedSize: manifest.originalSize, fallback: nil)
+        var source: URL? = Self.size(of: backup) == manifest.originalSize ? backup : nil
+        if let expected = AerialChecksum.recordedETag(of: destination) {
+            source = await firstMatching([backup] + originalCopies(of: manifest.slotID), expectedETag: expected)
+        }
+        guard let source, let sourceSize = Self.size(of: source) else { throw AerialError.backupMissing }
+        try await replace(destination, with: source, expectedSize: sourceSize, fallback: nil)
         try? FileManager.default.removeItem(at: backup)
         try? FileManager.default.removeItem(at: installedCopyURL)
         try? FileManager.default.removeItem(at: manifestURL)
         reloader.reload()
         log.log(.info, "aerial", "Restored Apple’s original Aerial “\(manifest.slotName)”")
+        refresh()
+    }
+
+    /// Last resort when no copy of Apple's original is left on the Mac: removes Driftwall's video and
+    /// its record so macOS downloads the Aerial again.
+    public func removeAndRedownload() throws {
+        guard let manifest else { throw AerialError.nothingToRestore }
+        let destination = reader.videoDirectory.appendingPathComponent("\(manifest.slotID).mov")
+        try AerialCatalogReader.validate(destination: destination, videoDirectory: reader.videoDirectory)
+        do {
+            if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
+        } catch {
+            throw AerialError.writeFailed(error.localizedDescription)
+        }
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: manifest.backupPath))
+        try? FileManager.default.removeItem(at: installedCopyURL)
+        try? FileManager.default.removeItem(at: manifestURL)
+        reloader.reload()
+        log.log(.info, "aerial", "Removed “\(manifest.slotName)” so macOS downloads Apple’s original again")
         refresh()
     }
 
@@ -255,6 +297,82 @@ public final class AerialLockScreenService {
         try? FileManager.default.removeItem(at: installedCopyURL)
         try? FileManager.default.removeItem(at: manifestURL)
         refresh()
+    }
+
+    // MARK: - Apple's originals
+
+    /// Copies of the Aerial elsewhere on the Mac (the screen saver's store), to recover Apple's original.
+    func originalCopies(of id: String) -> [URL] {
+        reader.originalCopyDirectories.map { $0.appendingPathComponent("\(id).mov") }
+    }
+
+    /// The first existing file whose contents match `expectedETag`. Hashing runs off the main actor.
+    func firstMatching(_ candidates: [URL], expectedETag: String) async -> URL? {
+        await Task.detached(priority: .userInitiated) {
+            candidates.first { FileManager.default.fileExists(atPath: $0.path) && AerialChecksum.matches($0, expectedETag: expectedETag) }
+        }.value
+    }
+
+    /// Makes sure the backup of an installed Aerial is Apple's original, replacing it with a verified
+    /// copy if it isn't. Returns the original's size, or nil when it can't be checked or fixed.
+    private func verifiedBackupSize(for manifest: AerialInstallManifest) async -> Int64? {
+        let file = reader.videoDirectory.appendingPathComponent("\(manifest.slotID).mov")
+        let backup = URL(fileURLWithPath: manifest.backupPath)
+        guard let expected = AerialChecksum.recordedETag(of: file) else { return nil }
+        if await firstMatching([backup], expectedETag: expected) != nil { return Self.size(of: backup) }
+        guard let copy = await firstMatching(originalCopies(of: manifest.slotID), expectedETag: expected),
+              let size = Self.size(of: copy), (try? backUp(copy, to: backup, expectedSize: size)) != nil else {
+            log.log(.warning, "aerial", "The backup of “\(manifest.slotName)” isn’t Apple’s original and no original copy was found")
+            return nil
+        }
+        log.log(.info, "aerial", "Replaced the backup of “\(manifest.slotName)” with a verified original")
+        return size
+    }
+
+    /// Downloaded Aerials whose video is no longer what macOS downloaded, apart from the one Driftwall
+    /// replaced on purpose. Aerials without a recorded ETag can't be checked and aren't listed.
+    public func findModifiedAerials() async -> [AerialSlot] {
+        refresh()
+        let managed = manifest?.slotID
+        let candidates = slots.filter { $0.id != managed }
+        return await Task.detached(priority: .utility) {
+            candidates.filter { AerialChecksum.isAppleOriginal($0.fileURL) == false }
+        }.value
+    }
+
+    public enum RepairResult: Equatable, Sendable {
+        /// Apple's original was found elsewhere on the Mac and written back.
+        case restoredFromCopy
+        /// No original was on the Mac: the changed file was removed so macOS downloads it again.
+        case willRedownload
+    }
+
+    /// Puts Apple's original back into an Aerial that was changed outside Driftwall: from a verified
+    /// copy when there is one, otherwise by removing the file so macOS downloads it again (macOS keeps
+    /// these files in the user's own Library and fetches a missing Aerial when it's needed).
+    public func repairModifiedAerial(_ slot: AerialSlot) async throws -> RepairResult {
+        guard slot.id != manifest?.slotID else { throw AerialError.invalidSlot } // use restore() for that one
+        try AerialCatalogReader.validate(destination: slot.fileURL, videoDirectory: reader.videoDirectory)
+        phase = "Repairing “\(slot.name)”…"
+        defer { phase = nil }
+        let result: RepairResult
+        if let expected = AerialChecksum.recordedETag(of: slot.fileURL),
+           let copy = await firstMatching(originalCopies(of: slot.id), expectedETag: expected),
+           let size = Self.size(of: copy) {
+            try await replace(slot.fileURL, with: copy, expectedSize: size, fallback: nil)
+            result = .restoredFromCopy
+        } else {
+            do {
+                try FileManager.default.removeItem(at: slot.fileURL)
+            } catch {
+                throw AerialError.writeFailed(error.localizedDescription)
+            }
+            result = .willRedownload
+        }
+        reloader.reload()
+        log.log(.info, "aerial", "Repaired Aerial “\(slot.name)” (\(result == .restoredFromCopy ? "original copy written back" : "removed so macOS downloads it again"))")
+        refresh()
+        return result
     }
 
     private func backUp(_ file: URL, to backup: URL, expectedSize: Int64) throws {

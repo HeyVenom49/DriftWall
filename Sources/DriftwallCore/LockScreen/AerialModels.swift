@@ -41,6 +41,7 @@ public enum AerialError: LocalizedError, Equatable {
     case unsafePath(String)
     case conversionFailed(String)
     case backupFailed(String)
+    case originalModified(String)
     case writeFailed(String)
     case verificationFailed(String)
     case nothingToRestore
@@ -53,6 +54,7 @@ public enum AerialError: LocalizedError, Equatable {
         case .unsafePath(let path): return "Refusing to write outside the Aerial video folder (\(path))."
         case .conversionFailed(let why): return "The video couldn’t be converted to Apple’s Aerial format: \(why)"
         case .backupFailed(let why): return "Apple’s original video couldn’t be backed up, so nothing was changed: \(why)"
+        case .originalModified(let name): return "“\(name)” no longer contains Apple’s original video (it was changed earlier), and no original copy was found, so it can’t be backed up. Repair it in Options › Check Apple’s Aerials, or choose another Aerial."
         case .writeFailed(let why): return "The Aerial video couldn’t be replaced: \(why)"
         case .verificationFailed(let why): return "The change couldn’t be verified: \(why)"
         case .nothingToRestore: return "No Aerial has been replaced by Driftwall."
@@ -70,10 +72,14 @@ public struct AerialCatalogReader: Sendable {
     public var root: URL   // ~/Library/Application Support/com.apple.wallpaper/aerials
     /// Other catalogs used only for names, for when the wallpaper's own catalog hasn't been downloaded.
     public var fallbackCatalogURLs: [URL]
+    /// Other folders that may hold a copy of the same Aerial (`<id>.mov`), read only to find Apple's
+    /// original when the wallpaper's own copy was changed.
+    public var originalCopyDirectories: [URL]
 
-    public init(root: URL, fallbackCatalogURLs: [URL] = []) {
+    public init(root: URL, fallbackCatalogURLs: [URL] = [], originalCopyDirectories: [URL] = []) {
         self.root = root
         self.fallbackCatalogURLs = fallbackCatalogURLs
+        self.originalCopyDirectories = originalCopyDirectories
     }
 
     public static var userRoot: URL {
@@ -83,6 +89,8 @@ public struct AerialCatalogReader: Sendable {
 
     /// The screen saver's catalog. It lists the same Aerials, so it can name them.
     public static let systemCatalogURL = URL(fileURLWithPath: "/Library/Application Support/com.apple.idleassetsd/Customer/entries.json")
+    /// The screen saver's own (world-readable) copies of the same Aerials.
+    public static let systemVideoDirectory = URL(fileURLWithPath: "/Library/Application Support/com.apple.idleassetsd/Customer/4KSDR240FPS", isDirectory: true)
 
     public var catalogURL: URL { root.appendingPathComponent("manifest/entries.json") }
     public var videoDirectory: URL { root.appendingPathComponent("videos", isDirectory: true) }
@@ -158,6 +166,31 @@ public enum AerialWallpaperStore {
         var found = Set<String>()
         collect(root, known: known, inDesktop: false, depth: 0, into: &found)
         return found
+    }
+
+    /// Which of the given displays (by CoreGraphics UUID) show `assetID` as their desktop wallpaper,
+    /// and so play it on the lock screen. A desktop choice under "AllSpacesAndDisplays" applies to every
+    /// display; otherwise each display's own "Displays/<UUID>" choice counts. nil when the store can't
+    /// be read.
+    public static func displays(showing assetID: String, among displayIDs: [String], indexURL: URL = indexURL) -> Set<String>? {
+        guard let data = try? Data(contentsOf: indexURL),
+              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) else { return nil }
+        return displays(showing: assetID, among: displayIDs, inIndex: root)
+    }
+
+    public static func displays(showing assetID: String, among displayIDs: [String], inIndex root: Any) -> Set<String> {
+        guard let root = root as? [String: Any] else { return [] }
+        func shows(_ entry: Any?) -> Bool {
+            guard let entry = entry as? [String: Any], let desktop = entry["Desktop"] else { return false }
+            return !selectedAssetIDs(inIndex: ["Desktop": desktop], among: [assetID]).isEmpty
+        }
+        if let all = root["AllSpacesAndDisplays"] as? [String: Any], all["Desktop"] != nil {
+            return shows(all) ? Set(displayIDs) : []
+        }
+        let perDisplay = root["Displays"] as? [String: Any] ?? [:]
+        return Set(displayIDs.filter { id in
+            shows(perDisplay.first { $0.key.caseInsensitiveCompare(id) == .orderedSame }?.value)
+        })
     }
 
     private static func collect(_ value: Any, known: Set<String>, inDesktop: Bool, depth: Int, into found: inout Set<String>) {

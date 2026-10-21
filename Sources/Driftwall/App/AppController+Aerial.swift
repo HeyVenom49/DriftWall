@@ -7,6 +7,9 @@ enum AerialSetupStep: Equatable {
     case choosingAerial
     /// An Aerial is chosen and macOS is downloading it.
     case downloading(name: String)
+    /// Installed, but these displays (by name) don't show the Aerial yet. Each display has its own
+    /// wallpaper, and only displays showing the Aerial play the video on the lock screen.
+    case addingToDisplays(aerial: String, displays: [String])
 }
 
 /// Animated lock screen: replaces the user's copy of one Apple Aerial video (see AerialLockScreenService).
@@ -22,9 +25,11 @@ extension AppController {
     func refreshAerial() {
         aerial.refresh()
         if let id = aerial.manifest?.slotID {
-            aerialSelectedAsWallpaper = AerialWallpaperSelection.isSelectedAsWallpaper(id)
+            let connected = displays.displays
+            aerialMissingDisplays = AerialWallpaperStore.displays(showing: id, among: connected.map(\.id))
+                .map { showing in connected.filter { !showing.contains($0.id) } }
         } else {
-            aerialSelectedAsWallpaper = nil
+            aerialMissingDisplays = nil
         }
     }
 
@@ -44,12 +49,48 @@ extension AppController {
             guard let self else { return }
             defer { self.aerialSetupStep = nil }
             guard let slot = await self.waitForChosenAerial() else { return }
-            guard let target = self.aerialTargetID else { return }
-            if await self.installAerial(wallpaperID: target, slot: slot, followsWallpaper: true, quiet: true) {
-                self.showBanner(.success, "Your lock screen now plays “\(self.library.wallpaper(target)?.title ?? "your wallpaper")”. Lock your Mac to see it.")
+            guard let target = self.aerialTargetID,
+                  await self.installAerial(wallpaperID: target, slot: slot, followsWallpaper: true, quiet: true),
+                  await self.waitForAerialOnAllDisplays() else { return }
+            self.showBanner(.success, "Your lock screen now plays “\(self.library.wallpaper(target)?.title ?? "your wallpaper")”\(self.displays.displays.count > 1 ? " on every display" : ""). Lock your Mac to see it.")
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    /// Guides the user through choosing the Aerial on the displays that don't show it yet.
+    func chooseAerialOnRemainingDisplays() {
+        aerialSetupTask?.cancel()
+        aerialSetupTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.aerialSetupStep = nil }
+            if await self.waitForAerialOnAllDisplays() {
+                self.showBanner(.success, "All set. Every display now plays your video on the lock screen.")
                 NSApp.activate(ignoringOtherApps: true)
             }
         }
+    }
+
+    /// Waits (up to 15 minutes) until every connected display shows the replaced Aerial, opening
+    /// Wallpaper settings if one doesn't. Returns false when cancelled or timed out. An unreadable
+    /// wallpaper store counts as done: Driftwall can't tell, so it doesn't hold the user up.
+    private func waitForAerialOnAllDisplays() async -> Bool {
+        var openedSettings = false
+        for _ in 0..<450 {
+            if Task.isCancelled { return false }
+            refreshAerial()
+            guard let manifest = aerial.manifest else { return false }
+            guard let missing = aerialMissingDisplays, !missing.isEmpty else { return true }
+            aerialSetupStep = .addingToDisplays(aerial: manifest.slotName, displays: missing.map(\.name))
+            if !openedSettings {
+                openedSettings = true
+                AerialWallpaperSelection.openWallpaperSettings()
+            }
+            try? await Task.sleep(for: .seconds(2))
+        }
+        if !Task.isCancelled {
+            showBanner(.info, "Some displays still show another wallpaper, so their lock screen shows a still picture.")
+        }
+        return false
     }
 
     func cancelAnimatedLockScreenSetup() {
@@ -118,12 +159,10 @@ extension AppController {
         }
         refreshAerial()
         if !quiet {
-            if aerialSelectedAsWallpaper == true {
-                showBanner(.success, "Done. Your lock screen now plays “\(wallpaper.title)”.")
+            if aerialMissingDisplays?.isEmpty == false {
+                chooseAerialOnRemainingDisplays()
             } else {
-                showBanner(.success, "Installed. Now click the “\(slot.name)” Aerial in Wallpaper settings.")
-                AerialWallpaperSelection.openWallpaperSettings()
-                watchForAerialSelection()
+                showBanner(.success, "Done. Your lock screen now plays “\(wallpaper.title)”.")
             }
         }
         // The wallpaper may have changed again while this one was converting.
@@ -146,10 +185,51 @@ extension AppController {
         cancelAnimatedLockScreenSetup()
         do {
             try await aerial.restore()
+            aerialRestoreNeedsDownload = false
             showBanner(.success, "Animated lock screen turned off. Apple’s original Aerial is back.")
+        } catch AerialError.backupMissing {
+            aerialRestoreNeedsDownload = true
+            showBanner(.error, "No copy of Apple’s original video is left on this Mac. You can let macOS download it again.")
         } catch {
             showBanner(.error, error.localizedDescription)
         }
+        refreshAerial()
+    }
+
+    /// Last resort for Restore: removes Driftwall's video so macOS downloads Apple's original again.
+    func turnOffAndRedownloadAerial() {
+        do {
+            try aerial.removeAndRedownload()
+            aerialRestoreNeedsDownload = false
+            showBanner(.success, "Animated lock screen turned off. macOS downloads Apple’s original video again the next time it’s needed.")
+        } catch {
+            showBanner(.error, error.localizedDescription)
+        }
+        refreshAerial()
+    }
+
+    // MARK: - Checking Apple's Aerials
+
+    /// Checks every downloaded Aerial against what macOS downloaded (reads each file, a few seconds).
+    func checkAerials() async {
+        aerialModifiedSlots = await aerial.findModifiedAerials()
+        if let modified = aerialModifiedSlots, !modified.isEmpty {
+            log.log(.warning, "aerial", "Changed Aerials: \(modified.map(\.name).joined(separator: ", "))")
+        }
+    }
+
+    func repairAerial(_ slot: AerialSlot) async {
+        do {
+            switch try await aerial.repairModifiedAerial(slot) {
+            case .restoredFromCopy:
+                showBanner(.success, "“\(slot.name)” is Apple’s original again.")
+            case .willRedownload:
+                showBanner(.success, "“\(slot.name)” was removed; macOS downloads Apple’s original again when it’s next shown.")
+            }
+        } catch {
+            showBanner(.error, error.localizedDescription)
+        }
+        await checkAerials()
         refreshAerial()
     }
 
@@ -167,23 +247,6 @@ extension AppController {
                 }
                 self.followWallpaperOnAerial()
                 try? await Task.sleep(for: .seconds(300))
-            }
-        }
-    }
-
-    /// Polls the read-only wallpaper store until the user picks the replaced Aerial (up to 5 minutes).
-    func watchForAerialSelection() {
-        aerialWatch?.cancel()
-        aerialWatch = Task { [weak self] in
-            for _ in 0..<300 {
-                try? await Task.sleep(for: .seconds(1))
-                guard let self, !Task.isCancelled, let id = self.aerial.manifest?.slotID else { return }
-                if AerialWallpaperSelection.isSelectedAsWallpaper(id) == true {
-                    self.aerialSelectedAsWallpaper = true
-                    self.showBanner(.success, "All set. Your lock screen now plays your video.")
-                    NSApp.activate(ignoringOtherApps: true)
-                    return
-                }
             }
         }
     }

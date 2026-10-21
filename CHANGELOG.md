@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.2.2 — 2026-10-21
+
+### Fixed
+- **Animated lock screen didn't play on a second display.** Each display has its own wallpaper, and
+  macOS only animates the lock screen on displays whose wallpaper is the replaced Aerial. Driftwall
+  checked whether the Aerial was chosen on *any* display, so it reported success while other displays
+  showed a still picture. It now checks every connected display.
+  - Setup only finishes once all of them show the Aerial: it names the displays still missing and
+    waits while you choose the Aerial for each one in Wallpaper settings.
+  - The panel also names any display that stops showing it, for example a newly connected monitor.
+- **Restore could put the wrong video back.** If an Aerial had already been changed (by hand, or by an
+  earlier version), installing over it backed up that changed file as "Apple's original", and Restore
+  then brought back the changed video.
+  - Driftwall now checks a file is Apple's original before backing it up. It recomputes the checksum
+    macOS recorded when it downloaded the Aerial, so no network is needed.
+  - If the file isn't the original, Driftwall uses a verified copy from the screen saver's Aerial
+    folder. If there is none, it refuses to install there.
+  - Restore also only writes a verified original. When none is left on the Mac, it offers to remove
+    Driftwall's video so macOS downloads Apple's again.
+
+### Added
+- **Check Apple's Aerials.** The animated lock screen panel lists Aerials that no longer contain
+  Apple's original video, with a Repair button for each. Repair writes a verified original copy
+  back, or removes the file so macOS downloads it again.
+
 ## 1.2.1 — 2026-10-21
 
 ### Added

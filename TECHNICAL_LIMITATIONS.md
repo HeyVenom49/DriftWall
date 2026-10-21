@@ -117,6 +117,30 @@ follows.
   - Driftwall can't choose the wallpaper itself: writing the wallpaper store isn't supported, so that
     one click stays with the user.
   - Verified on macOS 27.0.1 against a real selection ("Tahoe Day").
+- **Multiple displays.** The lock screen of each display shows that display's own wallpaper, so the
+  video plays only on displays whose wallpaper is the replaced Aerial.
+  - A desktop choice under `AllSpacesAndDisplays` applies to every display. Otherwise each
+    `Displays/<CoreGraphics display UUID>` entry counts.
+  - Driftwall checks every connected display (on setup, when the panel opens, and when displays change)
+    and names the ones not showing the Aerial.
+  - Driftwall can't set the wallpaper, so the user picks the Aerial once per display in Wallpaper
+    settings.
+  - Verified on macOS 27.0.1 with a built-in display (Aerial) and an external display (still image).
+- **Verifying Apple's originals.** macOS stores the server's ETag on each downloaded Aerial
+  (extended attribute `LastETag`, for example `"99627DD80E9ACA43158DDA2E2428CF42-8"`).
+  - Apple serves Aerials from S3. A multipart ETag there is the MD5 of the concatenated MD5s of 64 MiB
+    parts, followed by the part count. Driftwall recomputes it, offline.
+  - Verified on macOS 27.0.1: three untouched downloads matched, and a replaced file didn't.
+  - The attribute survives Driftwall's in-place writes, so the expected checksum stays known while
+    Driftwall's video is installed.
+  - Backups, restores and re-applies only use files that match. Candidates are the file itself,
+    Driftwall's backup, and the screen saver's copy in
+    `/Library/Application Support/com.apple.idleassetsd/Customer/4KSDR240FPS`, which is world-readable
+    and checked, never written.
+  - A file without the attribute can't be checked, and is trusted as before.
+- **Repairing Aerials changed outside Driftwall.** Driftwall writes a verified copy back when there
+  is one. Otherwise it removes the file, because macOS downloads a missing Aerial again. When that
+  download happens (for example only once the Aerial is shown or chosen again) **was not verified**.
 - **Still pictures.** Setting a still macOS desktop picture replaces the Aerial wallpaper, and with
   it the animated lock screen. While an Aerial is installed, Driftwall never sets one: both
   still-picture options are turned off and disabled.

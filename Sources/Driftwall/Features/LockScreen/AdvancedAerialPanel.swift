@@ -39,6 +39,9 @@ struct AdvancedAerialPanel: View {
                         offView()
                     }
                 }
+                if app.aerialSetupStep == nil, !service.isBusy, let modified = app.aerialModifiedSlots, !modified.isEmpty {
+                    modifiedAerialsView(modified)
+                }
                 if app.aerialSetupStep == nil, !service.isBusy {
                     DisclosureGroup("Options", isExpanded: $showOptions) { options(service) }
                         .font(.callout)
@@ -48,6 +51,9 @@ struct AdvancedAerialPanel: View {
         .onAppear {
             app.refreshAerial()
             if wallpaperID == nil { wallpaperID = app.aerialTargetID }
+        }
+        .task {
+            if app.aerialModifiedSlots == nil { await app.checkAerials() }
         }
         .confirmationDialog("Turn off the animated lock screen?", isPresented: $confirmRestore) {
             Button("Turn Off") { Task { await app.restoreAerial() } }
@@ -86,14 +92,14 @@ struct AdvancedAerialPanel: View {
                         .font(.callout.weight(.medium))
                 case .downloading(let name):
                     Text("macOS is downloading “\(name)”…").font(.callout.weight(.medium))
+                case .addingToDisplays(let aerial, let displays):
+                    Text("Now choose “\(aerial)” on \(displayList(displays)) too.").font(.callout.weight(.medium))
                 }
             }
-            Text(step == .choosingAerial
-                 ? "Driftwall continues by itself as soon as you’ve clicked one."
-                 : "Aerials are a few hundred megabytes. Driftwall continues by itself when the download finishes.")
-                .font(.caption).foregroundStyle(.secondary)
+            Text(stepDetail(step))
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
-                if step == .choosingAerial {
+                if !isDownloading(step) {
                     Button("Open Wallpaper Settings") { AerialWallpaperSelection.openWallpaperSettings() }
                 }
                 Button("Cancel") { app.cancelAnimatedLockScreenSetup() }
@@ -118,13 +124,15 @@ struct AdvancedAerialPanel: View {
                 Label("macOS put Apple’s “\(manifest.slotName)” video back. Driftwall puts yours back automatically once macOS has finished downloading it.",
                       systemImage: "arrow.uturn.backward.circle.fill")
                     .foregroundStyle(.orange)
-            } else if app.aerialSelectedAsWallpaper == false {
-                Label("“\(manifest.slotName)” isn’t your wallpaper right now, so the lock screen doesn’t play your video.",
+            } else if let missing = app.aerialMissingDisplays, !missing.isEmpty {
+                let total = app.displays.displays.count
+                Label(missing.count == total
+                      ? "“\(manifest.slotName)” isn’t your wallpaper right now, so the lock screen doesn’t play your video."
+                      : "Not playing on \(displayList(missing.map(\.name))): that display shows another wallpaper.",
                       systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
-                Button("Choose “\(manifest.slotName)” in Wallpaper Settings") {
-                    AerialWallpaperSelection.openWallpaperSettings()
-                    app.watchForAerialSelection()
+                Button(missing.count == total ? "Choose “\(manifest.slotName)” in Wallpaper Settings" : "Fix in Wallpaper Settings") {
+                    app.chooseAerialOnRemainingDisplays()
                 }
             } else {
                 Label("On: your lock screen plays “\(manifest.wallpaperTitle)”.", systemImage: "checkmark.circle.fill")
@@ -140,6 +148,52 @@ struct AdvancedAerialPanel: View {
                 }
                 Button("Turn Off…") { confirmRestore = true }
             }
+            if app.aerialRestoreNeedsDownload {
+                Text("No copy of Apple’s original “\(manifest.slotName)” is left on this Mac. Turning off removes your video instead, and macOS downloads Apple’s original again when it’s next shown.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button("Turn Off and Download Apple’s Original") { app.turnOffAndRedownloadAerial() }
+            }
+        }
+    }
+
+    /// Aerials whose video was changed outside Driftwall's install (by hand, or by an older version):
+    /// they would show the wrong video, and Driftwall won't back them up as originals.
+    private func modifiedAerialsView(_ modified: [AerialSlot]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(modified.count == 1
+                  ? "The Aerial “\(modified[0].name)” doesn’t contain Apple’s original video."
+                  : "\(modified.count) Aerials don’t contain Apple’s original video.",
+                  systemImage: "wrench.and.screwdriver.fill")
+                .font(.callout.weight(.medium)).foregroundStyle(.orange)
+            Text("They were changed outside Driftwall’s install, for example by an older version. Repair puts Apple’s original back: from a copy on this Mac when there is one, otherwise macOS downloads it again.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ForEach(modified) { slot in
+                HStack {
+                    Text(slot.name).font(.callout)
+                    Spacer()
+                    Button("Repair") { Task { await app.repairAerial(slot) } }
+                }
+            }
+        }
+    }
+
+    private func displayList(_ names: [String]) -> String {
+        ListFormatter.localizedString(byJoining: names.map { "“\($0)”" })
+    }
+
+    private func isDownloading(_ step: AerialSetupStep) -> Bool {
+        if case .downloading = step { return true }
+        return false
+    }
+
+    private func stepDetail(_ step: AerialSetupStep) -> String {
+        switch step {
+        case .choosingAerial:
+            return "Driftwall continues by itself as soon as you’ve clicked one."
+        case .downloading:
+            return "Aerials are a few hundred megabytes. Driftwall continues by itself when the download finishes."
+        case .addingToDisplays:
+            return "Each display has its own wallpaper, and only displays showing the Aerial play the video on the lock screen. In Wallpaper settings, pick the display at the top, then click the Aerial. Driftwall notices by itself."
         }
     }
 
@@ -165,6 +219,7 @@ struct AdvancedAerialPanel: View {
             Text("Choosing a video other than your lock-screen wallpaper keeps that video until you change it here. Its name and thumbnail in System Settings stay Apple’s.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
+                Button("Check Apple’s Aerials") { Task { await app.checkAerials() } }
                 Spacer()
                 Button("Install") {
                     guard let wallpaperID, let slot = selectedSlot else { return }
