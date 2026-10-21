@@ -9,6 +9,9 @@ import ServiceManagement
 @MainActor
 enum SystemWallpaperService {
     static func setStaticWallpaper(_ imageURL: URL, on screen: NSScreen) throws {
+        // Keep the user's own picture so it can be put back (Undo All, or the cleanup task after deletion).
+        AppController.shared.recordOriginalDesktopPicture(for: screen)
+        defer { AppController.shared.refreshCleanupAgent() }
         try NSWorkspace.shared.setDesktopImageURL(imageURL, for: screen, options: [
             .imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
             .allowClipping: true,

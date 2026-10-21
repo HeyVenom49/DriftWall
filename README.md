@@ -35,6 +35,27 @@ made it. Approve it once:
 After that it opens normally. Each new version asks once again. Everything else, including the lock screen screen saver and the
 animated lock screen, is set up from inside the app.
 
+## Uninstall
+
+Some Driftwall features change things outside Driftwall's own folders:
+- the **Animated Lock Screen** replaces your copy of one Apple Aerial;
+- the **Screen Saver Video** installs a screen saver;
+- the **still-picture** options replace your desktop picture;
+- Driftwall can **open at login**.
+
+**Before deleting Driftwall:** open Settings › General › Changes Outside Driftwall and choose **Undo All
+System Changes…**. Apple's original Aerial, your desktop pictures and the default screen saver come
+back. Then drag Driftwall to the Trash.
+
+**If you delete it without doing that:** while any of those changes are in place, Driftwall keeps a
+small cleanup task (`~/Library/LaunchAgents/local.driftwall.cleanup.plist`). Once the app has been gone
+for 10 minutes, the task puts those changes back and then removes itself. It does nothing while the app
+exists anywhere, or while the drive the app was on is unplugged. Its log is in
+`~/Library/Application Support/Driftwall/Cleanup/cleanup.log`.
+
+Your library data stays in `~/Library/Application Support/Driftwall`. Delete that folder too if you
+want nothing left behind.
+
 ## Build from source
 
 ### Requirements
@@ -65,8 +86,8 @@ scripts/package_release.sh    # dist/Driftwall-<version>.dmg (universal), .sha25
 The version comes from the newest entry in `CHANGELOG.md`. Publish it as a GitHub release:
 
 ```bash
-gh release create v1.2.2 dist/Driftwall-1.2.2.dmg dist/Driftwall-1.2.2.dmg.sha256 \
-  --title "Driftwall 1.2.2" --notes-file dist/RELEASE_NOTES-1.2.2.md
+gh release create v1.3.0 dist/Driftwall-1.3.0.dmg dist/Driftwall-1.3.0.dmg.sha256 \
+  --title "Driftwall 1.3.0" --notes-file dist/RELEASE_NOTES-1.3.0.md
 ```
 
 Releases are ad-hoc signed, which costs nothing. Users approve the app once, as described under

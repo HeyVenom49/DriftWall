@@ -11,18 +11,23 @@ struct HomeView: View {
                 EmptyStateView(symbol: "sparkles.tv", title: "Your library is empty",
                                message: "Import a video from your Mac to use it as a live desktop wallpaper. Drag files onto this window or choose them with Import.") {
                     Button("Import Videos…") { app.presentImportPanel() }.buttonStyle(.borderedProminent)
+                    Button("Browse Samples") { app.navigation.show(.explore) }
                 }
-                .padding(.top, 60)
+                .padding(.top, 48)
             } else {
                 VStack(alignment: .leading, spacing: Theme.Space.xl) {
-                    if let problem = app.startupProblem {
-                        ProblemCallout(message: problem) { app.startupProblem = nil }
-                            .padding(.horizontal, Theme.Space.page)
+                    VStack(alignment: .leading, spacing: Theme.Space.l) {
+                        PageHeader(title: "Home", subtitle: "\(library.wallpapers.count) wallpapers") {
+                            Button("Explore") { app.navigation.show(.explore) }
+                        }
+                        if let problem = app.startupProblem {
+                            InlineNotice(kind: .warning, title: "Something needs attention", message: problem) {
+                                Button("Dismiss") { app.startupProblem = nil }
+                            }
+                        }
+                        NowShowingStrip()
                     }
-                    if let hero = app.currentWallpaper ?? library.featuredWallpapers.first ?? library.wallpapers.first {
-                        HeroView(wallpaper: hero, isLive: app.currentWallpaper?.id == hero.id)
-                            .padding(.horizontal, Theme.Space.page)
-                    }
+                    .padding(.horizontal, Theme.Space.page)
 
                     let recent = library.recentWallpapers(limit: 12, kind: .applied).map(\.wallpaper)
                     if !recent.isEmpty {
@@ -34,80 +39,95 @@ struct HomeView: View {
                     }
                     let featured = library.featuredWallpapers
                     if !featured.isEmpty {
-                        ShelfRow(title: "Featured", subtitle: "Hand-picked highlights", wallpapers: featured)
+                        ShelfRow(title: "Featured", wallpapers: featured) { app.navigation.show(.explore) }
                     }
                     ForEach(library.collections) { collection in
                         ShelfRow(title: collection.title, subtitle: collection.subtitle, wallpapers: library.wallpapers(collection.wallpaperIDs))
                     }
-                    ShelfRow(title: "Popular", subtitle: "Ranked by curation and how often you use them",
-                             wallpapers: Array(library.popularWallpapers.prefix(12))) { app.navigation.show(.explore) }
 
-                    CategoryStrip()
-                        .padding(.horizontal, Theme.Space.page)
-                    ImportCallout()
-                        .padding(.horizontal, Theme.Space.page)
+                    VStack(alignment: .leading, spacing: Theme.Space.xl) {
+                        CategoryStrip()
+                        ImportRow()
+                    }
+                    .padding(.horizontal, Theme.Space.page)
                 }
                 .padding(.vertical, Theme.Space.page)
             }
         }
+        .background(Theme.background)
         .navigationTitle("Home")
     }
 }
 
-private struct HeroView: View {
+/// What is on the desktop right now, with the controls that act on it. Uses the real playback state.
+private struct NowShowingStrip: View {
     @Environment(AppController.self) private var app
-    let wallpaper: Wallpaper
-    let isLive: Bool
-    @State private var preview = PreviewPlayer()
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            ThumbnailView(wallpaper: wallpaper, cornerRadius: Theme.Radius.hero)
-            if let player = preview.player {
-                PlayerLayerView(player: player)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.hero, style: .continuous))
-            }
-            LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.hero, style: .continuous))
-            VStack(alignment: .leading, spacing: Theme.Space.s) {
-                HStack(spacing: 6) {
-                    if isLive { LiveBadge() } else { Badge(text: "FEATURED") }
-                    Badge(text: wallpaper.category.uppercased())
-                }
-                Text(wallpaper.title)
-                    .font(.system(size: 34, weight: .bold))
-                Text(wallpaper.summary)
-                    .font(.body)
-                    .foregroundStyle(.white.opacity(0.8))
-                    .lineLimit(2)
-                    .frame(maxWidth: 520, alignment: .leading)
-                HStack(spacing: Theme.Space.s) {
-                    if isLive {
-                        Button(app.settings.userPaused ? "Resume" : "Pause", systemImage: app.settings.userPaused ? "play.fill" : "pause.fill") { app.togglePlayback() }
-                            .buttonStyle(.borderedProminent)
-                    } else {
-                        Button("Set as Wallpaper", systemImage: "play.desktopcomputer") { app.apply(wallpaper.id) }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(!app.library.isAvailable(wallpaper.id))
+        if let current = app.currentWallpaper {
+            HStack(alignment: .center, spacing: Theme.Space.xl) {
+                ThumbnailView(wallpaper: current, cornerRadius: Theme.Radius.hero)
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .frame(width: 280)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.hero, style: .continuous)
+                            .strokeBorder(Theme.stroke, lineWidth: 0.5)
+                    )
+                    .shadow(color: .black.opacity(0.35), radius: 16, y: 8)
+                    .onTapGesture { app.navigation.open(current.id) }
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    Text("ON YOUR DESKTOP")
+                        .font(.eyebrow)
+                        .foregroundStyle(.tertiary)
+                    Text(current.title)
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(Theme.primaryText)
+                    HStack(spacing: 6) {
+                        StatusDot(color: isPaused ? Theme.warning : Theme.live)
+                        Text(statusText)
+                            .font(.callout)
+                            .foregroundStyle(Theme.secondaryText)
                     }
-                    Button("Details") { app.navigation.open(wallpaper.id) }
-                        .buttonStyle(.bordered)
+                    if !current.summary.isEmpty {
+                        Text(current.summary)
+                            .font(.callout)
+                            .foregroundStyle(Theme.secondaryText)
+                            .lineLimit(2)
+                            .frame(maxWidth: 420, alignment: .leading)
+                    }
+                    HStack(spacing: Theme.Space.s) {
+                        Button {
+                            app.togglePlayback()
+                        } label: {
+                            Label(app.settings.userPaused ? "Resume" : "Pause",
+                                  systemImage: app.settings.userPaused ? "play.fill" : "pause.fill")
+                        }
+                        Button {
+                            app.nextWallpaper()
+                        } label: { Label("Next", systemImage: "forward.fill") }
+                        Button("Details") { app.navigation.open(current.id) }
+                    }
+                    .controlSize(.regular)
+                    .padding(.top, 4)
                 }
-                .controlSize(.large)
-                .padding(.top, 4)
+                Spacer(minLength: 0)
             }
-            .foregroundStyle(.white)
-            .padding(Theme.Space.xl)
+        } else {
+            InlineNotice(kind: .info, title: "No live wallpaper on your desktop",
+                         message: "Pick a wallpaper below and choose Set as Wallpaper, or open one to preview it first.") {
+                Button("Explore") { app.navigation.show(.explore) }
+            }
         }
-        .frame(height: 360)
-        .frame(maxWidth: .infinity)
-        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.hero, style: .continuous).strokeBorder(Theme.stroke))
-        .task(id: "\(wallpaper.id)-\(isLive)") {
-            // The hero plays a muted in-app preview only while Home is on screen, and not when the same
-            // video is already live on the desktop (that would decode it twice).
-            if app.settings.hoverPreviews, !isLive, let url = app.library.mediaURL(for: wallpaper.id) { preview.load(url) } else { preview.stop() }
+    }
+
+    private var isPaused: Bool { !app.engine.pauseReasons.isEmpty }
+
+    private var statusText: String {
+        if let reason = PauseReason.allCases.first(where: app.engine.pauseReasons.contains) {
+            return "Paused — \(reason.label)"
         }
-        .onDisappear { preview.stop() }
+        let count = app.engine.surfaceStates.count
+        return count > 1 ? "Live on \(count) displays" : "Live"
     }
 }
 
@@ -115,51 +135,39 @@ private struct CategoryStrip: View {
     @Environment(AppController.self) private var app
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             SectionHeader(title: "Browse by Category")
-            HStack(spacing: Theme.Space.s) {
+            HStack(spacing: Theme.Space.xs) {
                 ForEach(app.library.categories, id: \.self) { category in
-                    FilterChip(title: category, isSelected: false) { app.navigation.explore(category: category) }
+                    Button(category) { app.navigation.explore(category: category) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                 }
             }
         }
     }
 }
 
-private struct ImportCallout: View {
+private struct ImportRow: View {
     @Environment(AppController.self) private var app
 
     var body: some View {
-        Panel {
-            HStack(spacing: Theme.Space.l) {
-                Image(systemName: "film.stack")
-                    .font(.system(size: 30, weight: .light))
-                    .foregroundStyle(Theme.accent)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Bring your own video").font(.headline)
-                    Text("Import .mov, .mp4 or .m4v files — or drop them anywhere on this window. Your originals stay where they are.")
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Import Videos…") { app.presentImportPanel() }
-                    .buttonStyle(.borderedProminent)
+        HStack(spacing: Theme.Space.m) {
+            Image(systemName: "film.stack")
+                .font(.system(size: 18, weight: .light))
+                .foregroundStyle(Theme.secondaryText)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Use your own video")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Theme.primaryText)
+                Text("Import .mov, .mp4 or .m4v files, or drop them anywhere on this window. Originals stay where they are.")
+                    .font(.callout)
+                    .foregroundStyle(Theme.secondaryText)
             }
+            Spacer(minLength: Theme.Space.m)
+            Button("Import Videos…") { app.presentImportPanel() }
         }
-    }
-}
-
-struct ProblemCallout: View {
-    let message: String
-    let dismiss: () -> Void
-
-    var body: some View {
-        HStack(alignment: .top, spacing: Theme.Space.m) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            Text(message).fixedSize(horizontal: false, vertical: true)
-            Spacer()
-            Button("Dismiss", action: dismiss)
-        }
-        .padding(Theme.Space.m)
-        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.top, Theme.Space.m)
+        .overlay(alignment: .top) { Divider().opacity(0.7) }
     }
 }

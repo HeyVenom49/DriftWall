@@ -10,7 +10,7 @@ struct RecentView: View {
         let items = app.library.recentWallpapers(limit: 100, kind: kind)
         VStack(alignment: .leading, spacing: Theme.Space.l) {
             PageHeader(title: "Recent", subtitle: "Wallpapers you recently applied or viewed") {
-                HStack {
+                HStack(spacing: Theme.Space.s) {
                     Picker("Show", selection: $kind) {
                         Text("Applied").tag(HistoryKind?.some(.applied))
                         Text("Viewed").tag(HistoryKind?.some(.viewed))
@@ -38,8 +38,10 @@ struct RecentView: View {
                     }
                 }
                 .scrollContentBackground(.hidden)
+                .listStyle(.inset)
             }
         }
+        .background(Theme.background)
         .navigationTitle("Recent")
         .confirmationDialog("Clear all history?", isPresented: $confirmClear) {
             Button("Clear History", role: .destructive) { app.library.clearHistory() }
@@ -56,32 +58,39 @@ private struct RecentRow: View {
 
     var body: some View {
         let availability = app.library.availabilityOf(wallpaper.id)
+        let isLive = !app.displaysShowing(wallpaper.id).isEmpty
         HStack(spacing: Theme.Space.m) {
-            ThumbnailView(wallpaper: wallpaper, cornerRadius: 8)
-                .frame(width: 112, height: 63)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(wallpaper.title).font(.headline)
+            ThumbnailView(wallpaper: wallpaper, cornerRadius: 6)
+                .frame(width: Theme.Size.rowThumbnail.width, height: Theme.Size.rowThumbnail.height)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: Theme.Space.s) {
+                    Text(wallpaper.title).font(.body.weight(.semibold))
+                    if isLive { LiveBadge() }
+                }
                 Text("\(entry.kind == .applied ? "Applied" : "Viewed") \(entry.date.relativeDescription) · \(wallpaper.category)")
                     .font(.callout).foregroundStyle(.secondary)
                 if !availability.isAvailable {
-                    Label("Video file is missing", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(.orange)
+                    StatusLabel(kind: .warning, text: "Video file is missing", font: .caption)
                 }
             }
             Spacer()
             if availability.isAvailable {
-                Button("Reapply") { app.apply(wallpaper.id) }
+                Button("Set Again") { app.apply(wallpaper.id) }
+                    .help("Set as wallpaper again")
             } else if wallpaper.source == .imported {
                 Button("Locate…") { app.presentRelinkPanel(for: wallpaper.id) }
                 Button("Remove", role: .destructive) { app.removeWallpaper(wallpaper.id) }
             }
             Button {
                 app.navigation.open(wallpaper.id)
-            } label: { Image(systemName: "chevron.right") }
+            } label: { Image(systemName: "chevron.right").foregroundStyle(.tertiary) }
                 .buttonStyle(.plain)
+                .help("Show details")
                 .accessibilityLabel("Show details")
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { app.navigation.open(wallpaper.id) }
         .contextMenu { WallpaperActions(wallpaper: wallpaper) }
     }
 }

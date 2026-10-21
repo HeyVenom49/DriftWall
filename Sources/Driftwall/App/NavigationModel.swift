@@ -34,6 +34,19 @@ enum SidebarItem: Hashable {
     }
 }
 
+/// A pending "name this playlist" prompt.
+enum PlaylistNameRequest: Identifiable {
+    case create(items: [WallpaperID])
+    case rename(id: String, currentName: String)
+
+    var id: String {
+        switch self {
+        case .create: return "create"
+        case .rename(let id, _): return "rename-\(id)"
+        }
+    }
+}
+
 /// UI navigation state: sidebar selection, the pushed detail stack and the shared search query.
 @MainActor
 @Observable
@@ -44,6 +57,16 @@ final class NavigationModel {
     var path: [WallpaperID] = []
     var query = SearchQuery()
     var showOnboarding = false
+    /// Asks for a playlist name (new or rename); shown as a sheet by the main window.
+    var playlistNameRequest: PlaylistNameRequest?
+    /// Incremented to move keyboard focus into the toolbar search field (⌘F).
+    var searchFocusRequest = 0
+
+    /// Shows Explore and puts the cursor in the search field.
+    func focusSearch() {
+        selection = .explore
+        searchFocusRequest += 1
+    }
 
     var detailWallpaperID: WallpaperID? {
         get { path.last }
@@ -58,6 +81,15 @@ final class NavigationModel {
 
     func show(_ item: SidebarItem) {
         selection = item
+    }
+
+    /// Asks for a name, then creates a playlist (optionally with wallpapers already in it).
+    func newPlaylist(with items: [WallpaperID] = []) {
+        playlistNameRequest = .create(items: items)
+    }
+
+    func renamePlaylist(_ playlist: Playlist) {
+        playlistNameRequest = .rename(id: playlist.id, currentName: playlist.name)
     }
 
     /// Opens Explore filtered to a category.

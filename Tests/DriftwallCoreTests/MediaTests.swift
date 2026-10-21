@@ -9,7 +9,7 @@ struct MediaTests {
         let dir = try Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let video = dir.appendingPathComponent("clip.mov")
-        try Fixtures.makeVideo(at: video, width: 320, height: 180, frames: 30, fps: 30)
+        try await Fixtures.makeVideo(at: video, width: 320, height: 180, frames: 30, fps: 30)
 
         let metadata = try await MediaInspector().inspect(video)
         #expect(metadata.pixelWidth == 320)
@@ -54,7 +54,7 @@ struct MediaTests {
         let dir = try Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let video = dir.appendingPathComponent("my_summer-trip.mov")
-        try Fixtures.makeVideo(at: video)
+        try await Fixtures.makeVideo(at: video)
         let importer = MediaImporter(libraryMediaDirectory: dir.appendingPathComponent("Media"))
 
         let wallpaper = try await importer.importFile(at: video, copyIntoLibrary: false, existing: [])
@@ -75,7 +75,7 @@ struct MediaTests {
         let dir = try Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let video = dir.appendingPathComponent("clip.mov")
-        try Fixtures.makeVideo(at: video)
+        try await Fixtures.makeVideo(at: video)
         let mediaDir = dir.appendingPathComponent("Media")
         let wallpaper = try await MediaImporter(libraryMediaDirectory: mediaDir).importFile(at: video, copyIntoLibrary: true, existing: [])
         #expect(wallpaper.ownsMediaFile)
@@ -93,7 +93,7 @@ struct MediaTests {
         let dir = try Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let video = dir.appendingPathComponent("clip.mov")
-        try Fixtures.makeVideo(at: video, width: 1280, height: 720, frames: 60)
+        try await Fixtures.makeVideo(at: video, width: 1280, height: 720, frames: 60)
         let service = ThumbnailService(cacheDirectory: dir.appendingPathComponent("Cache"), maxPixelSize: CGSize(width: 320, height: 320))
 
         let url = try await service.thumbnail(for: "w/1", mediaURL: video, duration: 2)
@@ -133,7 +133,7 @@ struct MediaTests {
         let dir = try Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let video = dir.appendingPathComponent("clip.mov")
-        try Fixtures.makeVideo(at: video)
+        try await Fixtures.makeVideo(at: video)
         let service = ThumbnailService(cacheDirectory: dir.appendingPathComponent("Cache"), maxConcurrent: 2)
         let urls = try await withThrowingTaskGroup(of: URL.self) { group in
             for i in 0..<12 { group.addTask { try await service.thumbnail(for: "item-\(i)", mediaURL: video, duration: 1) } }

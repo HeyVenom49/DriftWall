@@ -24,7 +24,19 @@ enum Fixtures {
     }
 
     /// Writes a short, real H.264 QuickTime movie so media tests exercise actual AVFoundation decoding.
-    static func makeVideo(at url: URL, width: Int = 320, height: Int = 180, frames: Int = 30, fps: Int32 = 30) throws {
+    /// Each size is encoded once and later calls get a copy. Encoding awaits the writer instead of
+    /// blocking a thread: tests run in parallel, and blocked threads left AVFoundation none to finish on.
+    static func makeVideo(at url: URL, width: Int = 320, height: Int = 180, frames: Int = 30, fps: Int32 = 30) async throws {
+        let template = try await VideoTemplates.shared.url(for: "\(width)x\(height)-\(frames)@\(fps)") {
+            let template = try temporaryDirectory().appendingPathComponent("template-\(width)x\(height)-\(frames)@\(fps).mov")
+            try await encodeVideo(at: template, width: width, height: height, frames: frames, fps: fps)
+            return template
+        }
+        try? FileManager.default.removeItem(at: url)
+        try FileManager.default.copyItem(at: template, to: url)
+    }
+
+    private static func encodeVideo(at url: URL, width: Int, height: Int, frames: Int, fps: Int32) async throws {
         try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
@@ -38,7 +50,7 @@ enum Fixtures {
         guard writer.startWriting() else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
         writer.startSession(atSourceTime: .zero)
         for frame in 0..<frames {
-            while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.001) }
+            while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(1)) }
             var buffer: CVPixelBuffer?
             guard let pool = adaptor.pixelBufferPool else { throw CocoaError(.fileWriteUnknown) }
             CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
@@ -51,10 +63,21 @@ enum Fixtures {
             adaptor.append(pixels, withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: fps))
         }
         input.markAsFinished()
-        let done = DispatchSemaphore(value: 0)
-        writer.finishWriting { done.signal() }
-        done.wait()
+        await writer.finishWriting()
         if writer.status != .completed { throw writer.error ?? CocoaError(.fileWriteUnknown) }
+    }
+}
+
+/// Encodes each fixture video once, even when many tests ask for it at the same time.
+private actor VideoTemplates {
+    static let shared = VideoTemplates()
+    private var templates: [String: Task<URL, Error>] = [:]
+
+    func url(for key: String, make: @escaping @Sendable () async throws -> URL) async throws -> URL {
+        if let existing = templates[key] { return try await existing.value }
+        let task = Task { try await make() }
+        templates[key] = task
+        return try await task.value
     }
 }
 

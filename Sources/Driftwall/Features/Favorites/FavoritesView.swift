@@ -17,21 +17,22 @@ struct FavoritesView: View {
             VStack(alignment: .leading, spacing: Theme.Space.l) {
                 PageHeader(title: "Favorites", subtitle: "\(app.library.favoriteIDs.count) saved") {
                     if !app.library.favoriteIDs.isEmpty {
-                        HStack {
-                            TextField("Filter favorites", text: $filter)
+                        HStack(spacing: Theme.Space.s) {
+                            TextField("Filter", text: $filter, prompt: Text("Filter favorites"))
                                 .textFieldStyle(.roundedBorder)
-                                .frame(width: 200)
+                                .frame(width: 180)
                             Picker("Sort", selection: $sort) {
                                 ForEach(FavoritesSort.allCases) { Text($0.rawValue).tag($0) }
                             }
                             .labelsHidden()
                             .fixedSize()
+                            .help("Sort order")
                         }
                     }
                 }
                 if app.library.favoriteIDs.isEmpty {
                     EmptyStateView(symbol: "heart", title: "No favorites yet",
-                                   message: "Click the heart on any wallpaper to keep it here. Favorites also power Next/Previous when no playlist is rotating.") {
+                                   message: "Hover over a wallpaper and click the heart to keep it here. When no playlist is rotating, Next and Previous step through your favorites.") {
                         Button("Explore Wallpapers") { app.navigation.show(.explore) }.buttonStyle(.borderedProminent)
                     }
                 } else if favorites.isEmpty {
@@ -44,6 +45,7 @@ struct FavoritesView: View {
             }
             .padding(Theme.Space.page)
         }
+        .background(Theme.background)
         .navigationTitle("Favorites")
     }
 

@@ -99,10 +99,11 @@ follows.
 - **Steps.**
   1. Convert to Apple's format: HEVC, exactly 3840×2160 (scaled to fill), looped to at least 120 s.
   2. Back up Apple's original to `Driftwall/Aerial/Backup/` and verify its size.
-  3. Write the converted video **over the existing file in place** (truncate and rewrite, same
-     inode). This keeps the extended attributes macOS stores with the download (`SourceURL`,
+  3. Keep a snapshot of the Aerial's current video, an APFS clone in Driftwall's folder. Then write the
+     converted video **over the existing file in place** (truncate and rewrite, same inode). This keeps the extended attributes macOS stores with the download (`SourceURL`,
      `LastETag`, quarantine), and macOS keeps treating the file as its downloaded Aerial. A
-     write that fails or doesn't verify puts the backup back.
+     write that fails or doesn't verify puts the snapshot back, as does a failure to record the
+     install. Restore, re-apply and repair work the same way.
   4. Keep the converted video as `Driftwall/Aerial/installed.mov` and write `manifest.json`.
   5. Restart `WallpaperAerialsExtension` and `WallpaperAgent` (`killall`; launchd relaunches them).
      Without this, the extension keeps playing the video it already loaded. The wallpaper flickers
@@ -128,9 +129,12 @@ follows.
   - Verified on macOS 27.0.1 with a built-in display (Aerial) and an external display (still image).
 - **Verifying Apple's originals.** macOS stores the server's ETag on each downloaded Aerial
   (extended attribute `LastETag`, for example `"99627DD80E9ACA43158DDA2E2428CF42-8"`).
-  - Apple serves Aerials from S3. A multipart ETag there is the MD5 of the concatenated MD5s of 64 MiB
-    parts, followed by the part count. Driftwall recomputes it, offline.
-  - Verified on macOS 27.0.1: three untouched downloads matched, and a replaced file didn't.
+  - Apple serves Aerials from S3. A multipart ETag there is the MD5 of the concatenated MD5s of each
+    part, followed by the part count. Driftwall recomputes it, offline.
+  - The part size depends on the upload: newer Aerials use 64 MiB and some 2023 ones 100,000,000
+    bytes. Driftwall tries every common part size that gives the recorded part count, in one read.
+  - Verified on 2026-10-21 against Apple's server for all nine Aerials on the test Mac (both part
+    sizes occur). A replaced file didn't match.
   - The attribute survives Driftwall's in-place writes, so the expected checksum stays known while
     Driftwall's video is installed.
   - Backups, restores and re-applies only use files that match. Candidates are the file itself,
@@ -141,6 +145,45 @@ follows.
 - **Repairing Aerials changed outside Driftwall.** Driftwall writes a verified copy back when there
   is one. Otherwise it removes the file, because macOS downloads a missing Aerial again. When that
   download happens (for example only once the Aerial is shown or chosen again) **was not verified**.
+- **Spaces.** With "Show on all Spaces" off, Wallpaper settings stores a display's choice under
+  `Spaces/<Space UUID>/Displays/<display UUID>` for the Space it shows, and leaves `Displays/<UUID>`
+  unchanged.
+  - Driftwall reads each display's current Space from `com.apple.spaces` › `SpacesDisplayConfiguration`
+    › `Management Data` › `Monitors` (`Display Identifier` is a display UUID, or `Main`, plus
+    `Current Space.uuid`).
+  - It checks, in order: `AllSpacesAndDisplays`, then that Space's entry for the display, then
+    `Displays/<UUID>`, then that Space's `Default`.
+  - The precedence was inferred from one Mac (macOS 27.0.1, built-in plus external display), not
+    from documentation.
+  - Choosing the Aerial per Space means other Spaces keep their own picture, so Driftwall suggests
+    "Show on all Spaces".
+- **Video format and lock-screen behaviour** (observed 2026-10-21, macOS 27.0.1, from the unified
+  log of `WallpaperAerialsExtension`). These are observations, not documented behaviour.
+  - Apple's 4K SDR Aerials are HEVC Main10, 3840×2160, Rec. 709, 240 fps (track timescale 240000),
+    about 300 s long. Driftwall's files are 8-bit HEVC from the export preset, at the source's frame
+    rate.
+  - macOS's Aerial player reads samples itself (`VideoSampleReadingErrors`), not through AVPlayer.
+    On lock it ramps the video up ("rampingUp"); on unlock it eases to a still.
+  - The position carries over between locks (start = last stop minus about 4.6 s). Apple's videos
+    loop past their end (positions over 480 s seen on a 300 s file).
+  - On unlock the player keeps playing for about 6 s, then stops on a still. A lock during those
+    6 s logs "Play Action: Nothing", and the video starts when the slow-down ends, about 4–5 s into
+    the lock. This is the same with Apple's own Aerial (compared on 2026-10-21 with Tahoe Day
+    restored). It's macOS behaviour, not something Driftwall can change.
+  - Files written with AVAssetWriter in Apple's format (Main10, 240000 timescale, original length,
+    and a 240 fps variant) left the lock screen black on both displays, while export-preset files
+    play. Why wasn't found. Snapshots of another downloaded Aerial (Golden Gate Sunset) appear in the
+    log with Apple's own file too, so they aren't the cause.
+  - **Open GOP.** HEVC export presets write CRA keyframes with RASL leading frames (NAL types 21 and
+    8/9). Apple's Aerials have one IDR and only TRAIL/TSA frames, in 5 temporal layers with `tscl`/
+    `tsas` sample groups.
+    - With export-preset files the player logged `VideoSampleReadingErrors Code=4` at unlock, and the
+      next lock restarted only one of three players.
+    - Driftwall therefore encodes with a VideoToolbox session with `AllowOpenGOP = false`, giving IDR
+      keyframes and no RASL frames, and writes the samples unchanged with AVAssetWriter.
+    - Temporal layers couldn't be reproduced: the hardware HEVC encoder rejects
+      `BaseLayerFrameRateFraction` (-12900).
+    - Whether the closed GOP alone stops the black screens has to be confirmed on the lock screen.
 - **Still pictures.** Setting a still macOS desktop picture replaces the Aerial wallpaper, and with
   it the animated lock screen. While an Aerial is installed, Driftwall never sets one: both
   still-picture options are turned off and disabled.
@@ -178,6 +221,39 @@ follows.
   - a missing backup, an invalid source, and switching slots.
 
   The production 4K conversion is an opt-in test (`DRIFTWALL_SLOW_TESTS=1`).
+
+## Undoing system changes after the app is deleted
+
+macOS doesn't notify an app that it's being deleted, so Driftwall installs a cleanup task outside the
+app, and only while it has changed something outside its own folders:
+- `~/Library/LaunchAgents/local.driftwall.cleanup.plist`, loaded with `launchctl bootstrap gui/<uid>`,
+  with `AssociatedBundleIdentifiers` so System Settings › Login Items names Driftwall;
+- `~/Library/Application Support/Driftwall/Cleanup/cleanup.sh`.
+
+It runs at login, every 15 minutes, and when the app's folder changes. The script is rewritten on every
+launch, so it follows the app if it moves.
+
+- **Deciding the app is gone.**
+  - The recorded path is missing; and
+  - the path isn't on an unmounted `/Volumes/<name>` (an unplugged drive); and
+  - Spotlight (`mdfind kMDItemCFBundleIdentifier`) finds no copy outside a Trash.
+  - Then it waits 10 minutes, because a rebuild or an update replaces the app briefly.
+  - If Spotlight is off for the volume, a moved app is only found again once it is launched, since
+    each launch records the new path.
+- **What it undoes.**
+  - It writes the Aerial backup back in place, keeping macOS's download metadata, and only if the
+    backup's size matches the record. With no usable backup it removes the modified Aerial, so macOS
+    downloads Apple's again.
+  - It removes `Driftwall.saver` and the lock-screen video copy.
+  - It restores the recorded original desktop pictures through JavaScript for Automation and the
+    AppKit bridge (no Apple events, so no permission prompt). Displays are matched by name;
+    disconnected ones are skipped.
+  - Then it removes itself. Any failed step keeps everything for the next run.
+- **Not undone after deletion:** the login item. macOS stops it from opening an app that no longer
+  exists; Undo All in Settings unregisters it properly.
+- **Verified:** the script's logic, with the real script run by bash against a fake setup in unit
+  tests. **Not verified:** a real deletion on a real system, and the desktop-picture restore, which the
+  tests only compile, so they can't change the real desktop.
 
 ## Lifecycle and power signals
 

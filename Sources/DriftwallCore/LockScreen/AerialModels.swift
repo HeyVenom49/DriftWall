@@ -38,6 +38,7 @@ public enum AerialStatus: Equatable, Sendable {
 public enum AerialError: LocalizedError, Equatable {
     case storeUnavailable(String)
     case invalidSlot
+    case busy
     case unsafePath(String)
     case conversionFailed(String)
     case backupFailed(String)
@@ -51,6 +52,7 @@ public enum AerialError: LocalizedError, Equatable {
         switch self {
         case .storeUnavailable(let why): return "Apple’s Aerial videos aren’t available on this Mac: \(why)"
         case .invalidSlot: return "That Aerial isn’t downloaded on this Mac. Choose it once in Wallpaper settings so macOS downloads it, then try again."
+        case .busy: return "Driftwall is already changing an Aerial. Wait for it to finish, then try again."
         case .unsafePath(let path): return "Refusing to write outside the Aerial video folder (\(path))."
         case .conversionFailed(let why): return "The video couldn’t be converted to Apple’s Aerial format: \(why)"
         case .backupFailed(let why): return "Apple’s original video couldn’t be backed up, so nothing was changed: \(why)"
@@ -168,29 +170,63 @@ public enum AerialWallpaperStore {
         return found
     }
 
-    /// Which of the given displays (by CoreGraphics UUID) show `assetID` as their desktop wallpaper,
-    /// and so play it on the lock screen. A desktop choice under "AllSpacesAndDisplays" applies to every
-    /// display; otherwise each display's own "Displays/<UUID>" choice counts. nil when the store can't
-    /// be read.
-    public static func displays(showing assetID: String, among displayIDs: [String], indexURL: URL = indexURL) -> Set<String>? {
+    /// Which of the given displays (by CoreGraphics UUID) show `assetID` as their desktop wallpaper
+    /// right now, and so play it on the lock screen. `currentSpaces` maps a display to the Space it
+    /// shows (see `currentSpaces(inSpacesPreferences:mainDisplayID:)`). nil when the store can't be read.
+    public static func displays(showing assetID: String, among displayIDs: [String], currentSpaces: [String: String],
+                                indexURL: URL = indexURL) -> Set<String>? {
         guard let data = try? Data(contentsOf: indexURL),
               let root = try? PropertyListSerialization.propertyList(from: data, format: nil) else { return nil }
-        return displays(showing: assetID, among: displayIDs, inIndex: root)
+        return displays(showing: assetID, among: displayIDs, currentSpaces: currentSpaces, inIndex: root)
     }
 
-    public static func displays(showing assetID: String, among displayIDs: [String], inIndex root: Any) -> Set<String> {
+    /// For each display, its most specific entry with a desktop choice wins:
+    /// 1. "Spaces/<current Space>/Displays/<UUID>" — what Wallpaper settings writes for a display while
+    ///    "Show on all Spaces" is off (seen on macOS 27.0.1 for an external display),
+    /// 2. "Displays/<UUID>",
+    /// 3. "Spaces/<current Space>/Default",
+    /// 4. "AllSpacesAndDisplays" (one wallpaper everywhere) for displays with no entry of their own.
+    /// The order was inferred from one Mac, not documented. Most-specific-first means a stale or
+    /// non-Aerial "AllSpacesAndDisplays" choice can't hide a display's own Aerial choice.
+    public static func displays(showing assetID: String, among displayIDs: [String], currentSpaces: [String: String] = [:],
+                                inIndex root: Any) -> Set<String> {
         guard let root = root as? [String: Any] else { return [] }
-        func shows(_ entry: Any?) -> Bool {
-            guard let entry = entry as? [String: Any], let desktop = entry["Desktop"] else { return false }
-            return !selectedAssetIDs(inIndex: ["Desktop": desktop], among: [assetID]).isEmpty
+        func entry(_ dict: Any?, _ key: String) -> [String: Any]? {
+            (dict as? [String: Any])?.first { $0.key.caseInsensitiveCompare(key) == .orderedSame }?.value as? [String: Any]
         }
-        if let all = root["AllSpacesAndDisplays"] as? [String: Any], all["Desktop"] != nil {
-            return shows(all) ? Set(displayIDs) : []
+        func desktop(_ entry: [String: Any]?) -> Any? { entry?["Desktop"] }
+        func shows(_ desktop: Any) -> Bool {
+            !selectedAssetIDs(inIndex: ["Desktop": desktop], among: [assetID]).isEmpty
         }
-        let perDisplay = root["Displays"] as? [String: Any] ?? [:]
+        let everywhere = desktop(root["AllSpacesAndDisplays"] as? [String: Any])
         return Set(displayIDs.filter { id in
-            shows(perDisplay.first { $0.key.caseInsensitiveCompare(id) == .orderedSame }?.value)
+            let space = currentSpaces.first { $0.key.caseInsensitiveCompare(id) == .orderedSame }.flatMap { entry(root["Spaces"], $0.value) }
+            let choice = desktop(entry(space?["Displays"], id))
+                ?? desktop(entry(root["Displays"], id))
+                ?? desktop(space?["Default"] as? [String: Any])
+                ?? everywhere
+            return choice.map(shows) ?? false
         })
+    }
+
+    /// The Space each display shows now, from the `com.apple.spaces` preference
+    /// "SpacesDisplayConfiguration" › "Management Data" › "Monitors". Each monitor has a "Display
+    /// Identifier" (a display UUID, or "Main" for the main display) and a "Current Space" with a "uuid"
+    /// (empty for the original desktop, matching the "" key in the wallpaper store).
+    public static func currentSpaces(inSpacesPreferences configuration: Any, mainDisplayID: String?) -> [String: String] {
+        guard let management = (configuration as? [String: Any])?["Management Data"] as? [String: Any],
+              let monitors = management["Monitors"] as? [[String: Any]] else { return [:] }
+        var result: [String: String] = [:]
+        for monitor in monitors {
+            guard var display = monitor["Display Identifier"] as? String,
+                  let space = (monitor["Current Space"] as? [String: Any])?["uuid"] as? String else { continue }
+            if display == "Main" {
+                guard let mainDisplayID else { continue }
+                display = mainDisplayID
+            }
+            result[display] = space
+        }
+        return result
     }
 
     private static func collect(_ value: Any, known: Set<String>, inDesktop: Bool, depth: Int, into found: inout Set<String>) {

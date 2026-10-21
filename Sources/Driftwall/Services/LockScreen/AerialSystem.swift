@@ -19,6 +19,13 @@ struct KillallWallpaperReloader: AerialWallpaperReloader {
 }
 
 enum AerialWallpaperSelection {
+    /// The Space each display shows now (read-only, from the `com.apple.spaces` preferences). Wallpaper
+    /// choices can be per Space, so this decides which choice is on screen.
+    static func currentSpaces(mainDisplayID: String?) -> [String: String] {
+        guard let configuration = CFPreferencesCopyAppValue("SpacesDisplayConfiguration" as CFString, "com.apple.spaces" as CFString) else { return [:] }
+        return AerialWallpaperStore.currentSpaces(inSpacesPreferences: configuration, mainDisplayID: mainDisplayID)
+    }
+
     static func openWallpaperSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension") {
             NSWorkspace.shared.open(url)

@@ -110,8 +110,9 @@ struct AppCommands: Commands {
         CommandGroup(after: .newItem) {
             Button("Import Videos…") { app.presentImportPanel() }
                 .keyboardShortcut("i", modifiers: .command)
-            Button("New Playlist") {
-                if let playlist = app.library.createPlaylist(named: "") { app.navigation.show(.playlist(playlist.id)) }
+            Button("New Playlist…") {
+                WindowOpener.openMain()
+                app.navigation.newPlaylist()
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
         }
@@ -132,7 +133,7 @@ struct AppCommands: Commands {
                     .keyboardShortcut(KeyEquivalent(Character(String(offset + 1))), modifiers: .command)
             }
             Divider()
-            Button("Search") { app.navigation.show(.explore) }
+            Button("Search") { app.navigation.focusSearch() }
                 .keyboardShortcut("f", modifiers: .command)
         }
     }

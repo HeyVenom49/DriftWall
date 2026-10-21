@@ -10,60 +10,65 @@ struct DisplaysView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.xl) {
                 PageHeader(title: "Displays", subtitle: "\(displays.count) connected") {
-                    Picker("Mode", selection: Binding(get: { app.settings.displayMode }, set: { app.settings.displayMode = $0 })) {
+                    Picker("Layout", selection: Binding(get: { app.settings.displayMode }, set: { app.settings.displayMode = $0 })) {
                         ForEach(DisplayMode.allCases) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .fixedSize()
+                    .help("Give each display its own wallpaper, or show the same one everywhere")
                 }
 
                 if displays.isEmpty {
                     EmptyStateView(symbol: "display.trianglebadge.exclamationmark", title: "No displays detected",
-                                   message: "Driftwall will restore wallpapers automatically when a display is connected.") { EmptyView() }
+                                   message: "Driftwall restores wallpapers automatically when a display is connected.") { EmptyView() }
                 } else {
                     ArrangementView(displays: displays)
-                        .frame(height: 220)
+                        .frame(height: 200)
 
                     if app.settings.displayMode == .mirror {
-                        Text("Every display shows the same wallpaper. One video decoder is shared by all displays.")
-                            .foregroundStyle(.secondary)
+                        StatusLabel(kind: .info, text: "Every display shows the same wallpaper, decoded once and shared by all displays.")
                     }
 
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: Theme.Space.l)], spacing: Theme.Space.l) {
-                        ForEach(displays) { display in
-                            DisplayCard(display: display)
+                    VStack(spacing: 0) {
+                        ForEach(Array(displays.enumerated()), id: \.element.id) { index, display in
+                            if index > 0 { Divider().padding(.leading, 56).opacity(0.6) }
+                            DisplayRow(display: display)
                         }
                     }
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.section, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.section, style: .continuous)
+                            .strokeBorder(Theme.stroke, lineWidth: 0.5)
+                    )
                 }
 
                 if !dormant.isEmpty {
-                    VStack(alignment: .leading, spacing: Theme.Space.m) {
-                        SectionHeader(title: "Remembered Displays", subtitle: "Assignments for disconnected displays are restored when they reconnect.")
+                    VStack(alignment: .leading, spacing: Theme.Space.s) {
+                        SectionHeader(title: "Remembered Displays", subtitle: "Restored when they reconnect")
                         ForEach(dormant, id: \.displayID) { assignment in
-                            HStack {
-                                Image(systemName: "display").foregroundStyle(.secondary)
+                            HStack(spacing: Theme.Space.m) {
+                                Image(systemName: "display").foregroundStyle(.tertiary)
                                 Text(assignment.displayName).font(.callout.weight(.medium))
-                                Text("→ \(app.library.wallpaper(assignment.wallpaperID)?.title ?? "Removed wallpaper")")
+                                Text(app.library.wallpaper(assignment.wallpaperID)?.title ?? "Removed wallpaper")
                                     .font(.callout).foregroundStyle(.secondary)
-                                Text("· last set \(assignment.updatedAt.relativeDescription)").font(.caption).foregroundStyle(.tertiary)
+                                Text("· set \(assignment.updatedAt.relativeDescription)").font(.caption).foregroundStyle(.tertiary)
                                 Spacer()
                                 Button("Forget") { app.forgetAssignment(displayID: assignment.displayID) }
                             }
+                            .padding(.vertical, 2)
                         }
                     }
                 }
 
-                Panel {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Label("How live wallpapers are shown", systemImage: "info.circle").font(.headline)
-                        Text("Driftwall plays video in a click-through window placed at the desktop level of each display — above the system wallpaper and below your app windows. The lock screen and login window cannot show live video; enable “Match system wallpaper” in Settings › Playback to give them a matching still frame.")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
+                InlineNotice(kind: .info, title: "How live wallpapers are shown",
+                             message: "Driftwall plays video in a click-through window at the desktop level of each display, above the macOS wallpaper and below your app windows. The lock screen is set up separately.") {
+                    Button("Lock Screen…") { app.navigation.show(.lockScreen) }
                 }
             }
             .padding(Theme.Space.page)
         }
+        .background(Theme.background)
         .navigationTitle("Displays")
     }
 }
@@ -86,12 +91,13 @@ private struct ArrangementView: View {
                                       y: (union.maxY - display.frame.maxY) * scale + offsetY,
                                       width: display.frame.width * scale, height: display.frame.height * scale)
                     let state = app.engine.surfaceStates[display.id]
+                    let isTarget = app.isDefaultTarget(display)
                     ZStack {
                         if let state, let wallpaper = app.library.wallpaper(state.wallpaperID) {
                             ThumbnailView(wallpaper: wallpaper, cornerRadius: 4)
                         } else {
                             RoundedRectangle(cornerRadius: 4).fill(Theme.surfaceRaised)
-                            Text("System wallpaper").font(.caption).foregroundStyle(.secondary)
+                            Text("macOS wallpaper").font(.caption).foregroundStyle(.secondary)
                         }
                         VStack {
                             Spacer()
@@ -103,19 +109,18 @@ private struct ArrangementView: View {
                         }
                     }
                     .frame(width: rect.width - 4, height: rect.height - 4)
-                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(display.isMain ? Theme.accent : Theme.stroke, lineWidth: display.isMain ? 2 : 1))
+                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(isTarget ? Theme.accent : Theme.stroke, lineWidth: isTarget ? 2 : 1))
                     .offset(x: rect.minX + 2, y: rect.minY + 2)
                 }
             }
         }
         .padding(10)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Display arrangement with \(displays.count) displays")
     }
 }
 
-private struct DisplayCard: View {
+private struct DisplayRow: View {
     @Environment(AppController.self) private var app
     let display: DisplayInfo
 
@@ -123,60 +128,90 @@ private struct DisplayCard: View {
         let state = app.engine.surfaceStates[display.id]
         let assignedID = app.settings.displayMode == .mirror ? app.settings.mirrorWallpaperID : app.assignments.wallpaperID(for: display.id)
         let assigned = app.library.wallpaper(assignedID)
-        Panel {
-            VStack(alignment: .leading, spacing: Theme.Space.m) {
-                HStack {
-                    Image(systemName: display.isBuiltIn ? "laptopcomputer" : "display").font(.title2)
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(display.name).font(.headline)
-                            if display.isMain { Badge(text: "MAIN") }
-                        }
-                        Text("\(display.resolutionText) px · \(Int(display.frame.width))×\(Int(display.frame.height)) pt @\(Int(display.scale))x\(display.rotation != 0 ? " · rotated \(Int(display.rotation))°" : "")")
-                            .font(.meta).foregroundStyle(.secondary)
-                    }
-                    Spacer()
+        let isTarget = app.isDefaultTarget(display)
+        HStack(alignment: .center, spacing: Theme.Space.l) {
+            Image(systemName: display.isBuiltIn ? "laptopcomputer" : "display")
+                .font(.system(size: 20, weight: .light))
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(display.name).font(.body.weight(.semibold))
+                    if display.isMain { Badge(text: "MAIN") }
+                    if isTarget { Badge(text: "DEFAULT TARGET") }
                 }
-                Divider()
-                HStack(spacing: Theme.Space.m) {
-                    if let assigned {
-                        ThumbnailView(wallpaper: assigned, cornerRadius: 6).frame(width: 96, height: 54)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(assigned.title).font(.callout.weight(.semibold))
-                            Text(state?.status.label ?? (app.library.isAvailable(assigned.id) ? "Not running" : "Video file missing"))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    } else {
-                        Text("No live wallpaper — the system wallpaper is visible.").font(.callout).foregroundStyle(.secondary)
+                Text("\(display.resolutionText) px · \(Int(display.frame.width))×\(Int(display.frame.height)) pt @\(Int(display.scale))x\(display.rotation != 0 ? " · rotated \(Int(display.rotation))°" : "")")
+                    .font(.meta).foregroundStyle(.secondary)
+            }
+            .frame(minWidth: 220, alignment: .leading)
+
+            if let assigned {
+                ThumbnailView(wallpaper: assigned, cornerRadius: 5)
+                    .frame(width: 80, height: 45)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(assigned.title).font(.callout.weight(.medium)).lineLimit(1)
+                    HStack(spacing: 5) {
+                        StatusDot(color: statusColor(state?.status, available: app.library.isAvailable(assigned.id)))
+                        Text(state?.status.label ?? (app.library.isAvailable(assigned.id) ? "Not running" : "Video file missing"))
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
-                    Spacer()
                 }
-                HStack {
-                    Menu("Choose Wallpaper") {
-                        let favorites = app.library.favoriteWallpapers.filter { app.library.isAvailable($0.id) }
-                        if !favorites.isEmpty {
-                            Section("Favorites") {
-                                ForEach(favorites) { w in Button(w.title) { app.apply(w.id, target: .display(id: display.id)) } }
-                            }
-                        }
-                        Section("All Wallpapers") {
-                            ForEach(app.library.search(SearchQuery(sort: .title)).filter { app.library.isAvailable($0.id) }) { w in
-                                Button(w.title) { app.apply(w.id, target: .display(id: display.id)) }
-                            }
-                        }
+            } else {
+                Text("macOS wallpaper (no live wallpaper)").font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: Theme.Space.m)
+
+            Menu("Choose Wallpaper") {
+                let favorites = app.library.favoriteWallpapers.filter { app.library.isAvailable($0.id) }
+                if !favorites.isEmpty {
+                    Section("Favorites") {
+                        ForEach(favorites) { w in Button(w.title) { app.apply(w.id, target: .display(id: display.id)) } }
                     }
-                    .fixedSize()
-                    if assigned != nil {
-                        Button("Clear") { app.clearWallpaper(displayID: display.id) }
-                            .help("Stop the live wallpaper on this display")
+                }
+                Section("All Wallpapers") {
+                    ForEach(app.library.search(SearchQuery(sort: .title)).filter { app.library.isAvailable($0.id) }) { w in
+                        Button(w.title) { app.apply(w.id, target: .display(id: display.id)) }
                     }
-                    Spacer()
-                    Button("Make Default") { app.settings.defaultTarget = .display(id: display.id) }
-                        .buttonStyle(.link)
-                        .disabled(app.settings.defaultTarget == .display(id: display.id))
-                        .help("“Set as Wallpaper” targets this display by default")
                 }
             }
+            .fixedSize()
+            Menu {
+                Button("Make Default Target") { app.settings.defaultTarget = .display(id: display.id) }
+                    .disabled(isTarget)
+                if assigned != nil {
+                    Divider()
+                    Button("Stop Live Wallpaper on This Display") { app.clearWallpaper(displayID: display.id) }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More for \(display.name)")
+            .accessibilityLabel("More for \(display.name)")
+        }
+        .padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.m)
+    }
+
+    private func statusColor(_ status: SurfaceStatus?, available: Bool) -> Color {
+        guard available else { return Theme.warning }
+        switch status {
+        case .playing: return Theme.live
+        case .loading: return Theme.accent
+        case .paused: return Theme.warning
+        case .failed: return Theme.danger
+        case nil: return .secondary
+        }
+    }
+}
+
+extension AppController {
+    /// Whether "Set as Wallpaper" targets this display by default.
+    func isDefaultTarget(_ display: DisplayInfo) -> Bool {
+        switch settings.defaultTarget {
+        case .display(let id): return id == display.id
+        case .mainDisplay: return display.isMain
+        case .allDisplays: return false
         }
     }
 }

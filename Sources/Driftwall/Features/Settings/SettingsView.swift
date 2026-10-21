@@ -5,16 +5,16 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
+            AppearanceSettings().tabItem { Label("Appearance", systemImage: "paintbrush") }
             PlaybackSettings().tabItem { Label("Playback", systemImage: "play.rectangle") }
             DisplaySettings().tabItem { Label("Displays", systemImage: "display.2") }
-            RotationSettingsPane().tabItem { Label("Rotation", systemImage: "arrow.triangle.2.circlepath") }
+            LockScreenSettings().tabItem { Label("Lock Screen", systemImage: "lock.display") }
             LibrarySettings().tabItem { Label("Library", systemImage: "externaldrive") }
-            AppearanceSettings().tabItem { Label("Appearance", systemImage: "paintbrush") }
             ShortcutSettings().tabItem { Label("Shortcuts", systemImage: "command") }
-            DiagnosticsSettings().tabItem { Label("Diagnostics", systemImage: "stethoscope") }
+            AboutSettings().tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 620)
-        .frame(minHeight: 440)
+        .frame(width: 640)
+        .frame(minHeight: 460)
     }
 }
 
@@ -50,8 +50,52 @@ private struct GeneralSettings: View {
                     WindowOpener.openMain()
                 }
             }
+            SystemChangesSection()
         }
         .formStyle(.grouped)
+    }
+}
+
+/// What Driftwall changed outside its own folders, how it's undone if the app is deleted, and undoing
+/// it now.
+private struct SystemChangesSection: View {
+    @Environment(AppController.self) private var app
+    @State private var confirmUndo = false
+    @State private var undoing = false
+
+    var body: some View {
+        let changes = app.systemChanges
+        Section("Changes Outside Driftwall") {
+            if changes.isEmpty {
+                Text("Driftwall hasn’t changed anything outside its own folders.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(changes, id: \.self) { change in
+                    Label(change, systemImage: "arrow.uturn.backward.circle")
+                }
+                HStack {
+                    Spacer()
+                    if undoing { ProgressView().controlSize(.small) }
+                    Button("Undo All System Changes…") { confirmUndo = true }
+                        .disabled(undoing)
+                }
+            }
+            Text(CleanupAgentService.isInstalled
+                 ? "If you delete Driftwall, a small cleanup task puts these back on its own about 10 minutes later, then removes itself. Before deleting Driftwall on purpose, you can also undo them here."
+                 : "When Driftwall changes something outside its own folders, it also installs a small cleanup task that puts it back if you delete the app.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .confirmationDialog("Undo all system changes?", isPresented: $confirmUndo) {
+            Button("Undo All System Changes") {
+                Task {
+                    undoing = true
+                    await app.undoAllSystemChanges()
+                    undoing = false
+                }
+            }
+        } message: {
+            Text("Apple’s original Aerial comes back, Driftwall’s screen saver is removed, your original desktop pictures are set again, and Driftwall stops opening at login. Your library, favorites and playlists stay.")
+        }
     }
 }
 
@@ -78,12 +122,13 @@ private struct PlaybackSettings: View {
                 Toggle("Match system wallpaper to a frame of the live wallpaper", isOn: setting(app, \.syncSystemWallpaper))
                     .disabled(app.isAerialOn)
                 if app.isAerialOn {
-                    Text("Off while the animated lock screen is on: a still picture would replace its Aerial wallpaper.")
-                        .font(.caption).foregroundStyle(.orange)
+                    Text("Off while the Animated Lock Screen is on: a still picture would replace its Aerial wallpaper.")
+                        .font(.caption).foregroundStyle(Theme.warning)
                 }
-                Text("When on, Driftwall replaces each display’s macOS desktop picture with a still frame so the lock screen, Mission Control and your desktop after quitting look consistent. Your previous desktop picture is not restored automatically.")
+                Text("When on, Driftwall replaces each display’s macOS desktop picture with a still frame so Mission Control and your desktop after quitting look consistent. Your previous desktop picture is not restored automatically.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            RotationSection()
             Section("Status") {
                 LabeledContent("Live displays", value: "\(app.engine.surfaceStates.count)")
                 LabeledContent("Active decoders", value: "\(app.engine.activePlayerCount)")
@@ -128,13 +173,14 @@ private struct DisplaySettings: View {
     }
 }
 
-private struct RotationSettingsPane: View {
+/// Playlist rotation, shown in the Playback pane.
+private struct RotationSection: View {
     @Environment(AppController.self) private var app
 
     var body: some View {
         let rotation = app.rotation
-        Form {
-            Section {
+        Group {
+            Section("Playlist Rotation") {
                 Picker("Playlist", selection: Binding(get: { rotation.isActive ? rotation.settings.playlistID : nil }, set: { id in
                     if let id { app.startPlaylist(id) } else { rotation.stop() }
                 })) {
@@ -148,16 +194,63 @@ private struct RotationSettingsPane: View {
                 RotationDisplayPicker()
                 Toggle("Paused", isOn: Binding(get: { rotation.settings.isPaused }, set: { rotation.setPaused($0) }))
                     .disabled(!rotation.isActive)
-            }
-            Section {
-                Text("Rotation changes only the display chosen in “Show on”. It does not advance while the Mac is asleep or locked, and skips playlist items whose video file is missing.")
+                Text("Rotation changes only the display chosen in “Show on”. It doesn’t advance while the Mac is asleep or locked, and skips playlist items whose video file is missing.")
                     .font(.caption).foregroundStyle(.secondary)
                 if app.library.playlists.isEmpty {
                     Text("Create a playlist in the main window to enable rotation.").font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
+    }
+}
+
+/// Lock-screen preferences and status; the full setup lives on the Lock Screen page.
+private struct LockScreenSettings: View {
+    @Environment(AppController.self) private var app
+
+    var body: some View {
+        let lock = app.settings.lockScreen
+        Form {
+            Section("Animated Lock Screen") {
+                LabeledContent("Status") {
+                    if let manifest = app.aerial.manifest {
+                        Text("On — plays “\(manifest.wallpaperTitle)” as “\(manifest.slotName)”")
+                    } else {
+                        Text("Off").foregroundStyle(.secondary)
+                    }
+                }
+                if let missing = app.aerialMissingDisplays, !missing.isEmpty, app.aerial.manifest != nil {
+                    Text("Not playing on \(missing.map(\.name).joined(separator: ", ")): that display shows another wallpaper.")
+                        .font(.caption).foregroundStyle(Theme.warning)
+                }
+                Text("Plays your wallpaper on the lock screen itself, behind the password prompt, by replacing your copy of one Apple Aerial wallpaper. Apple’s original is backed up.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Screen Saver Video") {
+                Toggle("Play video while the screen saver runs", isOn: Binding(get: { lock.isEnabled }, set: { app.setLockScreenEnabled($0) }))
+                    .disabled(!app.lockScreen.isSupported)
+                LabeledContent("Status", value: app.lockScreen.status.summary)
+                LabeledContent("Password required", value: app.passwordDelay.map { $0.replacingOccurrences(of: "delay is ", with: "") } ?? "Unknown")
+                Toggle("Also use a still frame as the macOS wallpaper picture",
+                       isOn: Binding(get: { lock.setsStillSystemPicture }, set: { app.setLockScreenStillPicture($0) }))
+                    .disabled(app.isAerialOn || !lock.isEnabled)
+                if app.isAerialOn {
+                    Text("Off while the Animated Lock Screen is on: a still picture would replace its Aerial wallpaper.")
+                        .font(.caption).foregroundStyle(Theme.warning)
+                }
+            }
+            Section {
+                Button("Open Lock Screen Setup…") {
+                    app.navigation.show(.lockScreen)
+                    WindowOpener.openMain()
+                }
+            }
+        }
         .formStyle(.grouped)
+        .onAppear {
+            app.refreshLockScreen()
+            app.refreshAerial()
+        }
     }
 }
 
@@ -184,7 +277,7 @@ private struct LibrarySettings: View {
                     Button("Show Library Folder") { NSWorkspace.shared.activateFileViewerSelecting([app.paths.supportDirectory]) }
                 }
             }
-            Section("Cache") {
+            Section("Preview Cache") {
                 LabeledContent("Preview images", value: cacheSize.formattedBytes)
                 Button("Clear Cache") {
                     Task {
@@ -235,7 +328,7 @@ private struct ShortcutSettings: View {
                     LabeledContent(action.title, value: action.display)
                 }
                 if let error = GlobalHotKeyCenter.shared.lastError, app.settings.globalHotKeysEnabled {
-                    Text(error).font(.caption).foregroundStyle(.orange)
+                    Text(error).font(.caption).foregroundStyle(Theme.warning)
                 }
             }
             Section("In Driftwall") {
@@ -245,6 +338,9 @@ private struct ShortcutSettings: View {
                 LabeledContent("Next / previous wallpaper", value: "⌥⌘→ / ⌥⌘←")
                 LabeledContent("Search", value: "⌘F")
                 LabeledContent("Go to Home … Lock Screen", value: "⌘1 … ⌘8")
+                LabeledContent("Open focused wallpaper (grid)", value: "↩")
+                LabeledContent("Set focused wallpaper (grid)", value: "Space")
+                LabeledContent("Move between wallpapers", value: "Tab / ⇧Tab")
                 LabeledContent("Set as wallpaper (detail)", value: "⌘↩")
                 LabeledContent("Favorite (detail)", value: "⌘L")
                 LabeledContent("Play / pause preview (detail)", value: "Space")
@@ -254,12 +350,22 @@ private struct ShortcutSettings: View {
     }
 }
 
-private struct DiagnosticsSettings: View {
+/// Version, then the diagnostics that stay on this Mac.
+private struct AboutSettings: View {
     @Environment(AppController.self) private var app
 
     var body: some View {
         let _ = app.diagnosticsEpoch
         VStack(alignment: .leading, spacing: Theme.Space.m) {
+            HStack(spacing: Theme.Space.m) {
+                Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 48, height: 48)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Driftwall").font(.title3.weight(.semibold))
+                    Text("Version \(Bundle.main.shortVersion) · Live video wallpapers for your Mac").font(.callout).foregroundStyle(.secondary)
+                }
+            }
+            Divider()
+            Text("Diagnostics").font(.headline)
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
                 GridRow { Text("Version").foregroundStyle(.secondary); Text(Bundle.main.shortVersion) }
                 GridRow { Text("macOS").foregroundStyle(.secondary); Text(ProcessInfo.processInfo.operatingSystemVersionString) }
@@ -285,7 +391,7 @@ private struct DiagnosticsSettings: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(8)
             }
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 8))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
             HStack {
                 Text("Diagnostics stay on this Mac. Nothing is sent anywhere.").font(.caption).foregroundStyle(.secondary)
                 Spacer()
@@ -310,8 +416,8 @@ private struct DiagnosticsSettings: View {
     private func color(_ level: DiagnosticsLog.Level) -> Color {
         switch level {
         case .info: return .secondary
-        case .warning: return .orange
-        case .error: return .red
+        case .warning: return Theme.warning
+        case .error: return Theme.danger
         }
     }
 }

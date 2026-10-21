@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Observation
+import VideoToolbox
 
 /// Converts a wallpaper video into the format of Apple's Aerial files.
 public protocol AerialVideoConverter: Sendable {
@@ -8,19 +9,33 @@ public protocol AerialVideoConverter: Sendable {
 }
 
 /// Real converter: repeats the clip until it is at least `minimumDuration` long (Aerials are long
-/// videos; a 12-second loop would otherwise end mid-lock), then exports HEVC at 3840×2160 like Apple's files.
+/// videos; a 12-second loop would otherwise end mid-lock), scales it to fill 3840×2160 like Apple's
+/// files, and encodes HEVC with VideoToolbox.
+///
+/// The encoder is driven directly, rather than through an export preset, to get a **closed GOP**:
+/// every keyframe is an IDR frame and no frame depends on frames before it. Export presets produce an
+/// open GOP (CRA keyframes followed by RASL frames, which reference the previous GOP). macOS's Aerial
+/// player restarts reading at keyframes when it ramps the video up or down around lock and unlock; with
+/// an open GOP it then logged `VideoSampleReadingErrors` and the affected screens stayed black. Apple's
+/// own Aerials have closed GOPs (checked on macOS 27.0.1). 8-bit HEVC at the source's frame rate and a
+/// 600 track timescale are kept from the export preset, which macOS plays.
+///
+/// Every frame is also tagged with HEVC temporal-layer information (all frames are layer 0, and every
+/// frame allows switching layers), which the movie writer stores as `tscl`, `tsas` and `stsa` sample
+/// groups. Apple's Aerials carry these groups. Without them the player still logged read errors when it
+/// began slowing the video down on unlock.
 public struct AVAerialVideoConverter: AerialVideoConverter {
     public var minimumDuration: Double
-    public var presetName: String
-    /// Output frame size. Apple's Aerial files are 3840×2160; export presets never upscale, so the
-    /// video is explicitly scaled (aspect fill, centered) to exactly this size.
+    /// Output frame size. Apple's Aerial files are 3840×2160; the video is explicitly scaled (aspect
+    /// fill, centered) to exactly this size.
     public var renderSize: CGSize
+    public var averageBitRate: Int
 
-    public init(minimumDuration: Double = 120, presetName: String = AVAssetExportPresetHEVC3840x2160,
-                renderSize: CGSize = CGSize(width: 3840, height: 2160)) {
+    public init(minimumDuration: Double = 120, renderSize: CGSize = CGSize(width: 3840, height: 2160),
+                averageBitRate: Int = 30_000_000) {
         self.minimumDuration = minimumDuration
-        self.presetName = presetName
         self.renderSize = renderSize
+        self.averageBitRate = averageBitRate
     }
 
     public func convert(_ source: URL, to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
@@ -36,7 +51,7 @@ public struct AVAerialVideoConverter: AerialVideoConverter {
         guard let track = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
             throw AerialError.conversionFailed("could not create a composition.")
         }
-        let (naturalSize, preferredTransform, frameRate) = try await videoTrack.load(.naturalSize, .preferredTransform, .nominalFrameRate)
+        let (naturalSize, preferredTransform, nominalFrameRate) = try await videoTrack.load(.naturalSize, .preferredTransform, .nominalFrameRate)
         let range = CMTimeRange(start: .zero, duration: duration)
         let repeats = max(1, Int((minimumDuration / seconds).rounded(.up)))
         var cursor = CMTime.zero
@@ -44,27 +59,24 @@ public struct AVAerialVideoConverter: AerialVideoConverter {
             try track.insertTimeRange(range, of: videoTrack, at: cursor)
             cursor = cursor + duration
         }
+        let frameRate = nominalFrameRate > 0 ? nominalFrameRate : 30
 
-        try? FileManager.default.removeItem(at: destination)
-        guard let export = AVAssetExportSession(asset: composition, presetName: presetName) else {
-            throw AerialError.conversionFailed("this Mac can’t encode HEVC at that size.")
-        }
-        export.outputURL = destination
-        export.outputFileType = .mov
-        export.shouldOptimizeForNetworkUse = false
-        export.videoComposition = Self.scalingComposition(track: track, naturalSize: naturalSize, transform: preferredTransform,
+        let reader = try AVAssetReader(asset: composition)
+        let output = AVAssetReaderVideoCompositionOutput(videoTracks: [track], videoSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+        ])
+        output.videoComposition = Self.scalingComposition(track: track, naturalSize: naturalSize, transform: preferredTransform,
                                                           duration: cursor, renderSize: renderSize, frameRate: frameRate)
+        output.alwaysCopiesSampleData = false
+        guard reader.canAdd(output) else { throw AerialError.conversionFailed("the video can’t be read for conversion.") }
+        reader.add(output)
 
-        let ticker = Task {
-            while !Task.isCancelled {
-                progress(Double(export.progress))
-                try? await Task.sleep(for: .milliseconds(250))
-            }
-        }
-        await export.export()
-        ticker.cancel()
-        guard export.status == .completed else {
-            throw AerialError.conversionFailed(export.error?.localizedDescription ?? "export ended with status \(export.status.rawValue).")
+        let encoder = ClosedGOPEncoder(reader: reader, output: output, destination: destination, size: renderSize,
+                                       frameRate: frameRate, averageBitRate: averageBitRate, total: cursor.seconds, progress: progress)
+        try await withTaskCancellationHandler {
+            try await encoder.run()
+        } onCancel: {
+            encoder.cancel()
         }
         progress(1)
     }
@@ -87,9 +99,199 @@ public struct AVAerialVideoConverter: AerialVideoConverter {
         instruction.layerInstructions = [layer]
         let composition = AVMutableVideoComposition()
         composition.renderSize = renderSize
-        composition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(frameRate > 0 ? frameRate.rounded() : 30))
+        composition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(frameRate.rounded()))
         composition.instructions = [instruction]
         return composition
+    }
+}
+
+/// Reads frames, encodes them with a VideoToolbox HEVC session (closed GOP) and writes the encoded
+/// samples unchanged into a QuickTime movie. Runs on its own dispatch queue: it blocks while the
+/// encoder or the writer catch up, which must not happen on Swift's shared concurrency threads.
+private final class ClosedGOPEncoder: @unchecked Sendable {
+    let reader: AVAssetReader
+    let output: AVAssetReaderOutput
+    let destination: URL
+    let size: CGSize
+    let frameRate: Float
+    let averageBitRate: Int
+    let total: Double
+    let progress: @Sendable (Double) -> Void
+
+    private let queue = DispatchQueue(label: "local.driftwall.aerial-conversion")
+    private let lock = NSLock()
+    private var writer: AVAssetWriter?
+    private var input: AVAssetWriterInput?
+    private var temporalLevel: [CFString: Any]?
+    private var failure: Error?
+    private var cancelled = false
+
+    init(reader: AVAssetReader, output: AVAssetReaderOutput, destination: URL, size: CGSize, frameRate: Float,
+         averageBitRate: Int, total: Double, progress: @escaping @Sendable (Double) -> Void) {
+        self.reader = reader
+        self.output = output
+        self.destination = destination
+        self.size = size
+        self.frameRate = frameRate
+        self.averageBitRate = averageBitRate
+        self.total = total
+        self.progress = progress
+    }
+
+    func run() async throws {
+        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
+            queue.async { [self] in
+                do {
+                    try encodeAll()
+                    done.resume()
+                } catch {
+                    try? FileManager.default.removeItem(at: destination)
+                    done.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func cancel() {
+        lock.withLock { cancelled = true }
+    }
+
+    private func fail(_ error: Error) {
+        lock.withLock { if failure == nil { failure = error } }
+    }
+
+    private func encodeAll() throws {
+        var created: VTCompressionSession?
+        let status = VTCompressionSessionCreate(allocator: nil, width: Int32(size.width), height: Int32(size.height),
+                                                codecType: kCMVideoCodecType_HEVC, encoderSpecification: nil,
+                                                imageBufferAttributes: nil, compressedDataAllocator: nil,
+                                                outputCallback: nil, refcon: nil, compressionSessionOut: &created)
+        guard status == noErr, let session = created else {
+            throw AerialError.conversionFailed("this Mac can’t encode HEVC at that size (\(status)).")
+        }
+        defer { VTCompressionSessionInvalidate(session) }
+        let properties: [CFString: CFTypeRef] = [
+            kVTCompressionPropertyKey_ProfileLevel: kVTProfileLevel_HEVC_Main_AutoLevel,
+            kVTCompressionPropertyKey_AverageBitRate: averageBitRate as CFNumber,
+            kVTCompressionPropertyKey_ExpectedFrameRate: frameRate as CFNumber,
+            kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration: 2 as CFNumber,
+            kVTCompressionPropertyKey_AllowOpenGOP: kCFBooleanFalse,
+            kVTCompressionPropertyKey_RealTime: kCFBooleanFalse,
+            kVTCompressionPropertyKey_ColorPrimaries: kCVImageBufferColorPrimaries_ITU_R_709_2,
+            kVTCompressionPropertyKey_TransferFunction: kCVImageBufferTransferFunction_ITU_R_709_2,
+            kVTCompressionPropertyKey_YCbCrMatrix: kCVImageBufferYCbCrMatrix_ITU_R_709_2,
+        ]
+        for (key, value) in properties {
+            let result = VTSessionSetProperty(session, key: key, value: value)
+            // A closed GOP is the point of this encoder; the rest are preferences.
+            if result != noErr, key == kVTCompressionPropertyKey_AllowOpenGOP {
+                throw AerialError.conversionFailed("the encoder can’t produce a closed GOP (\(result)).")
+            }
+        }
+        VTCompressionSessionPrepareToEncodeFrames(session)
+
+        guard reader.startReading() else {
+            throw AerialError.conversionFailed(reader.error?.localizedDescription ?? "reading failed.")
+        }
+        let inFlight = DispatchSemaphore(value: 8)   // bounds memory: 4K frames are 12 MB each
+        var lastReported = -1.0
+        while let sample = output.copyNextSampleBuffer() {
+            if lock.withLock({ cancelled || failure != nil }) { break }
+            guard let pixels = CMSampleBufferGetImageBuffer(sample) else { continue }
+            let time = CMSampleBufferGetPresentationTimeStamp(sample)
+            inFlight.wait()
+            let result = VTCompressionSessionEncodeFrame(session, imageBuffer: pixels, presentationTimeStamp: time,
+                                                         duration: CMSampleBufferGetDuration(sample), frameProperties: nil,
+                                                         infoFlagsOut: nil) { [self] status, _, encoded in
+                defer { inFlight.signal() }
+                if status != noErr { fail(AerialError.conversionFailed("encoding failed (\(status)).")); return }
+                if let encoded { write(encoded) }
+            }
+            if result != noErr { inFlight.signal(); fail(AerialError.conversionFailed("encoding failed (\(result)).")) }
+            if time.seconds - lastReported >= 0.5 {
+                lastReported = time.seconds
+                progress(min(0.99, time.seconds / total))
+            }
+        }
+        VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+
+        if lock.withLock({ cancelled }) {
+            reader.cancelReading()
+            writer?.cancelWriting()
+            throw AerialError.conversionFailed("cancelled.")
+        }
+        if reader.status == .failed { fail(AerialError.conversionFailed(reader.error?.localizedDescription ?? "reading failed.")) }
+        if let failure = lock.withLock({ failure }) {
+            writer?.cancelWriting()
+            throw failure
+        }
+        guard let writer, let input else { throw AerialError.conversionFailed("no frames were encoded.") }
+        input.markAsFinished()
+        let finished = DispatchSemaphore(value: 0)
+        writer.finishWriting { finished.signal() }
+        finished.wait()
+        guard writer.status == .completed else {
+            throw AerialError.conversionFailed(writer.error?.localizedDescription ?? "writing ended with status \(writer.status.rawValue).")
+        }
+    }
+
+    /// Marks the sample as temporal layer 0 with (stepwise) temporal sub-layer access. The encoder only
+    /// produces layer 0, so this describes the stream truthfully; the profile fields come from its hvcC.
+    private func tagTemporalLayer(_ sample: CMSampleBuffer) {
+        if temporalLevel == nil {
+            var level: [CFString: Any] = [kCMHEVCTemporalLevelInfoKey_TemporalLevel: 0]
+            if let format = CMSampleBufferGetFormatDescription(sample),
+               let atoms = CMFormatDescriptionGetExtension(format, extensionKey: kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms) as? [String: Any],
+               let hvcC = atoms["hvcC"] as? Data, hvcC.count >= 13 {
+                let bytes = [UInt8](hvcC)
+                level[kCMHEVCTemporalLevelInfoKey_ProfileSpace] = Int(bytes[1] >> 6)
+                level[kCMHEVCTemporalLevelInfoKey_TierFlag] = Int((bytes[1] >> 5) & 1)
+                level[kCMHEVCTemporalLevelInfoKey_ProfileIndex] = Int(bytes[1] & 0x1F)
+                level[kCMHEVCTemporalLevelInfoKey_ProfileCompatibilityFlags] = Data(bytes[2..<6])
+                level[kCMHEVCTemporalLevelInfoKey_ConstraintIndicatorFlags] = Data(bytes[6..<12])
+                level[kCMHEVCTemporalLevelInfoKey_LevelIndex] = Int(bytes[12])
+            }
+            temporalLevel = level
+        }
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true) as? [NSMutableDictionary],
+              let first = attachments.first else { return }
+        first[kCMSampleAttachmentKey_HEVCTemporalLevelInfo] = temporalLevel
+        first[kCMSampleAttachmentKey_HEVCTemporalSubLayerAccess] = true
+        first[kCMSampleAttachmentKey_HEVCStepwiseTemporalSubLayerAccess] = true
+    }
+
+    /// Called by VideoToolbox in decode order. The writer is created with the first sample's format.
+    private func write(_ sample: CMSampleBuffer) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard failure == nil else { return }
+        do {
+            if writer == nil {
+                try? FileManager.default.removeItem(at: destination)
+                let newWriter = try AVAssetWriter(outputURL: destination, fileType: .mov)
+                newWriter.movieTimeScale = 600
+                let newInput = AVAssetWriterInput(mediaType: .video, outputSettings: nil,
+                                                  sourceFormatHint: CMSampleBufferGetFormatDescription(sample))
+                newInput.expectsMediaDataInRealTime = false
+                newInput.mediaTimeScale = 600
+                guard newWriter.canAdd(newInput) else { throw AerialError.conversionFailed("the movie can’t be written.") }
+                newWriter.add(newInput)
+                guard newWriter.startWriting() else {
+                    throw AerialError.conversionFailed(newWriter.error?.localizedDescription ?? "writing failed.")
+                }
+                newWriter.startSession(atSourceTime: .zero)
+                writer = newWriter
+                input = newInput
+            }
+            guard let writer, let input else { return }
+            tagTemporalLayer(sample)
+            while !input.isReadyForMoreMediaData, writer.status == .writing { usleep(500) }
+            if !input.append(sample) {
+                throw AerialError.conversionFailed(writer.error?.localizedDescription ?? "writing failed.")
+            }
+        } catch {
+            if failure == nil { failure = error }
+        }
     }
 }
 
@@ -156,7 +358,7 @@ public final class AerialLockScreenService {
 
     /// Converts, backs up, then replaces the Aerial file and reloads the wallpaper.
     public func install(wallpaper: Wallpaper, mediaURL: URL, slot: AerialSlot, followsWallpaper: Bool = false) async throws {
-        guard !isBusy else { return }
+        guard !isBusy else { throw AerialError.busy }
         defer { phase = nil; progress = nil }
         refresh()
         guard let current = slots.first(where: { $0.id == slot.id }) else { throw AerialError.invalidSlot }
@@ -177,7 +379,7 @@ public final class AerialLockScreenService {
         // 2. Back up Apple's original. If a different slot was replaced earlier, that one is restored
         //    first so only one Aerial is ever modified.
         if let previous = manifest, previous.slotID != current.id {
-            try await restore()
+            try await restoreOriginal()
         }
         let backup = backupDirectory.appendingPathComponent("\(current.id).mov")
         let originalSize: Int64
@@ -201,18 +403,25 @@ public final class AerialLockScreenService {
             try backUp(original, to: backup, expectedSize: originalSize)
         }
 
-        // 3. Replace the file and keep the converted copy for re-applying later.
+        // 3. Replace the file, then keep the converted copy and record the install. The Aerial's previous
+        //    contents are kept until all of that succeeded, so a failure at any step puts them back and
+        //    the Aerial never disagrees with Driftwall's record.
         phase = "Replacing the Aerial video…"
-        try await replace(current.fileURL, with: stagingURL, expectedSize: stagedSize, fallback: backup)
-        _ = try? fm.removeItem(at: installedCopyURL)
-        try fm.moveItem(at: stagingURL, to: installedCopyURL)
-
-        // 4. Record and reload.
+        let rollback = try snapshot(current.fileURL)
+        defer { try? fm.removeItem(at: rollback) }
+        try await replace(current.fileURL, with: stagingURL, expectedSize: stagedSize, rollback: rollback)
         let manifest = AerialInstallManifest(slotID: current.id, slotName: current.name, wallpaperID: wallpaper.id,
                                              wallpaperTitle: wallpaper.title, originalSize: originalSize,
                                              installedSize: stagedSize, backupPath: backup.path, installedAt: Date(),
                                              followsWallpaper: followsWallpaper)
-        try write(manifest)
+        do {
+            _ = try? fm.removeItem(at: installedCopyURL)
+            try fm.moveItem(at: stagingURL, to: installedCopyURL)
+            try write(manifest)
+        } catch {
+            await putBack(rollback, into: current.fileURL)
+            throw AerialError.writeFailed("Driftwall couldn’t record the install, so the Aerial was put back: \(error.localizedDescription)")
+        }
         reloader.reload()
         log.log(.info, "aerial", "Replaced Aerial “\(current.name)” with “\(wallpaper.title)” (backup at \(backup.path))")
         refresh()
@@ -230,9 +439,9 @@ public final class AerialLockScreenService {
         // A missing file means macOS removed the download; a new file wouldn't carry its download
         // metadata, so wait until macOS downloads it again.
         guard let currentSize = Self.size(of: destination) else { return false }
+        guard let backup = backupURL(for: manifest) else { throw AerialError.unsafePath(manifest.backupPath) }
         phase = "Re-applying your video to the Aerial…"
         defer { phase = nil }
-        let backup = URL(fileURLWithPath: manifest.backupPath)
         let isOriginal = await Task.detached(priority: .utility) { AerialChecksum.isAppleOriginal(destination) }.value
         if isOriginal != false {
             try backUp(destination, to: backup, expectedSize: currentSize)
@@ -241,7 +450,9 @@ public final class AerialLockScreenService {
         } else {
             log.log(.warning, "aerial", "“\(manifest.slotName)” changed but isn’t Apple’s original; keeping the existing backup")
         }
-        try await replace(destination, with: installedCopyURL, expectedSize: manifest.installedSize, fallback: backup)
+        let rollback = try snapshot(destination)
+        defer { try? FileManager.default.removeItem(at: rollback) }
+        try await replace(destination, with: installedCopyURL, expectedSize: manifest.installedSize, rollback: rollback)
         reloader.reload()
         log.log(.info, "aerial", "macOS restored Apple’s “\(manifest.slotName)”; re-applied “\(manifest.wallpaperTitle)”")
         refresh()
@@ -251,8 +462,14 @@ public final class AerialLockScreenService {
     /// Puts Apple's original video back. Uses the backup when it is verifiably Apple's original, or
     /// another verified copy of the same Aerial if the backup isn't (or is missing).
     public func restore() async throws {
+        guard !isBusy else { throw AerialError.busy }
+        try await restoreOriginal()
+    }
+
+    /// The restore itself; also used by `install` when switching Aerials (while it is busy).
+    private func restoreOriginal() async throws {
         guard let manifest else { throw AerialError.nothingToRestore }
-        let backup = URL(fileURLWithPath: manifest.backupPath)
+        guard let backup = backupURL(for: manifest) else { throw AerialError.unsafePath(manifest.backupPath) }
         let destination = reader.videoDirectory.appendingPathComponent("\(manifest.slotID).mov")
         try AerialCatalogReader.validate(destination: destination, videoDirectory: reader.videoDirectory)
         phase = "Restoring Apple’s original video…"
@@ -262,7 +479,9 @@ public final class AerialLockScreenService {
             source = await firstMatching([backup] + originalCopies(of: manifest.slotID), expectedETag: expected)
         }
         guard let source, let sourceSize = Self.size(of: source) else { throw AerialError.backupMissing }
-        try await replace(destination, with: source, expectedSize: sourceSize, fallback: nil)
+        let rollback = try snapshot(destination)
+        defer { try? FileManager.default.removeItem(at: rollback) }
+        try await replace(destination, with: source, expectedSize: sourceSize, rollback: rollback)
         try? FileManager.default.removeItem(at: backup)
         try? FileManager.default.removeItem(at: installedCopyURL)
         try? FileManager.default.removeItem(at: manifestURL)
@@ -282,7 +501,7 @@ public final class AerialLockScreenService {
         } catch {
             throw AerialError.writeFailed(error.localizedDescription)
         }
-        try? FileManager.default.removeItem(at: URL(fileURLWithPath: manifest.backupPath))
+        if let backup = backupURL(for: manifest) { try? FileManager.default.removeItem(at: backup) }
         try? FileManager.default.removeItem(at: installedCopyURL)
         try? FileManager.default.removeItem(at: manifestURL)
         reloader.reload()
@@ -293,7 +512,7 @@ public final class AerialLockScreenService {
     /// When macOS already put its own file back, Driftwall's record and backup are no longer needed.
     public func forgetReplacedInstall() {
         guard case .replacedByMacOS(let manifest) = status else { return }
-        try? FileManager.default.removeItem(at: URL(fileURLWithPath: manifest.backupPath))
+        if let backup = backupURL(for: manifest) { try? FileManager.default.removeItem(at: backup) }
         try? FileManager.default.removeItem(at: installedCopyURL)
         try? FileManager.default.removeItem(at: manifestURL)
         refresh()
@@ -317,8 +536,8 @@ public final class AerialLockScreenService {
     /// copy if it isn't. Returns the original's size, or nil when it can't be checked or fixed.
     private func verifiedBackupSize(for manifest: AerialInstallManifest) async -> Int64? {
         let file = reader.videoDirectory.appendingPathComponent("\(manifest.slotID).mov")
-        let backup = URL(fileURLWithPath: manifest.backupPath)
-        guard let expected = AerialChecksum.recordedETag(of: file) else { return nil }
+        guard let backup = backupURL(for: manifest),
+              let expected = AerialChecksum.recordedETag(of: file) else { return nil }
         if await firstMatching([backup], expectedETag: expected) != nil { return Self.size(of: backup) }
         guard let copy = await firstMatching(originalCopies(of: manifest.slotID), expectedETag: expected),
               let size = Self.size(of: copy), (try? backUp(copy, to: backup, expectedSize: size)) != nil else {
@@ -352,6 +571,7 @@ public final class AerialLockScreenService {
     /// these files in the user's own Library and fetches a missing Aerial when it's needed).
     public func repairModifiedAerial(_ slot: AerialSlot) async throws -> RepairResult {
         guard slot.id != manifest?.slotID else { throw AerialError.invalidSlot } // use restore() for that one
+        guard !isBusy else { throw AerialError.busy }
         try AerialCatalogReader.validate(destination: slot.fileURL, videoDirectory: reader.videoDirectory)
         phase = "Repairing “\(slot.name)”…"
         defer { phase = nil }
@@ -359,7 +579,9 @@ public final class AerialLockScreenService {
         if let expected = AerialChecksum.recordedETag(of: slot.fileURL),
            let copy = await firstMatching(originalCopies(of: slot.id), expectedETag: expected),
            let size = Self.size(of: copy) {
-            try await replace(slot.fileURL, with: copy, expectedSize: size, fallback: nil)
+            let rollback = try snapshot(slot.fileURL)
+            defer { try? FileManager.default.removeItem(at: rollback) }
+            try await replace(slot.fileURL, with: copy, expectedSize: size, rollback: rollback)
             result = .restoredFromCopy
         } else {
             do {
@@ -389,22 +611,60 @@ public final class AerialLockScreenService {
         }
     }
 
-    /// Writes `source` over `destination` and checks the size. If that fails and a `fallback` is
-    /// given, the fallback (Apple's original) is written back so the Aerial is never left half-written.
+    /// Writes `source` over `destination` and checks the size. The write happens in place (see
+    /// `overwriteInPlace`), so it truncates first; if it fails, `rollback` (a snapshot of the previous
+    /// contents) is written back, so the Aerial is never left empty or half-written.
     /// The copy runs off the main actor: Aerial videos are hundreds of megabytes.
-    private func replace(_ destination: URL, with source: URL, expectedSize: Int64, fallback: URL?) async throws {
+    private func replace(_ destination: URL, with source: URL, expectedSize: Int64, rollback: URL) async throws {
         do {
             try await Task.detached(priority: .userInitiated) { try Self.overwriteInPlace(destination, with: source) }.value
             guard Self.size(of: destination) == expectedSize else {
                 throw AerialError.verificationFailed("the Aerial file doesn’t match the video that was written.")
             }
         } catch {
-            if let fallback {
-                _ = await Task.detached(priority: .userInitiated) { try? Self.overwriteInPlace(destination, with: fallback) }.value
-            }
+            await putBack(rollback, into: destination)
             if let error = error as? AerialError { throw error }
             throw AerialError.writeFailed(error.localizedDescription)
         }
+    }
+
+    /// A copy of the file's current contents to roll back to. On APFS this is a clone: instant, and it
+    /// takes no extra space until one of the two changes.
+    private func snapshot(_ file: URL) throws -> URL {
+        let fm = FileManager.default
+        try fm.createDirectory(at: workDirectory, withIntermediateDirectories: true)
+        let copy = workDirectory.appendingPathComponent("rollback-\(UUID().uuidString).mov")
+        do {
+            try fm.copyItem(at: file, to: copy)
+        } catch {
+            throw AerialError.writeFailed("the Aerial’s current video couldn’t be kept for a rollback, so nothing was changed: \(error.localizedDescription)")
+        }
+        return copy
+    }
+
+    /// Writes a snapshot back after a failed change. If even that fails, the file is left for macOS to
+    /// replace (it downloads an unreadable Aerial again) and the failure is logged.
+    private func putBack(_ rollback: URL, into destination: URL) async {
+        let restored = await Task.detached(priority: .userInitiated) { () -> Bool in
+            (try? Self.overwriteInPlace(destination, with: rollback)) != nil
+        }.value
+        if restored {
+            log.log(.warning, "aerial", "A change to \(destination.lastPathComponent) failed; its previous video was put back")
+        } else {
+            log.log(.error, "aerial", "A change to \(destination.lastPathComponent) failed and its previous video couldn’t be put back")
+        }
+    }
+
+    /// The manifest's backup path, only if it is exactly `<backupDirectory>/<slotID>.mov`. A damaged or
+    /// edited manifest can never make Driftwall read, overwrite or delete a file anywhere else.
+    func backupURL(for manifest: AerialInstallManifest) -> URL? {
+        let expected = backupDirectory.appendingPathComponent("\(manifest.slotID).mov").standardizedFileURL
+        let recorded = URL(fileURLWithPath: manifest.backupPath).standardizedFileURL
+        guard AerialCatalogReader.isValidAssetID(manifest.slotID), recorded.path == expected.path else {
+            log.log(.error, "aerial", "Ignoring an unexpected backup path in the Aerial record: \(manifest.backupPath)")
+            return nil
+        }
+        return expected
     }
 
     /// Rewrites the file's contents without replacing the file itself, so the download metadata macOS

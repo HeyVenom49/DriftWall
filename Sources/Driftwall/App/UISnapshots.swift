@@ -29,7 +29,8 @@ enum UISnapshots {
                 try? await Task.sleep(for: .seconds(2))
                 let screens: [(String, SidebarItem)] = [
                     ("home", .home), ("explore", .explore), ("favorites", .favorites), ("recent", .recent),
-                    ("library", .library), ("displays", .displays), ("lockscreen", .lockScreen), ("playlist", .playlist(playlist.id)),
+                    ("library", .library), ("displays", .displays), ("lockscreen", .lockScreen), ("playlists", .playlists),
+                    ("playlist", .playlist(playlist.id)),
                 ]
                 for (name, item) in screens {
                     app.navigation.show(item)
@@ -43,6 +44,11 @@ enum UISnapshots {
                 app.navigation.query = SearchQuery(text: "qwerty")
                 try? await Task.sleep(for: .seconds(1))
                 capture("no-results", to: outputDirectory)
+                app.navigation.renamePlaylist(playlist)
+                try? await Task.sleep(for: .seconds(1))
+                capture("rename-playlist", to: outputDirectory)
+                app.navigation.playlistNameRequest = nil
+                try? await Task.sleep(for: .seconds(0.5))
                 app.navigation.query = SearchQuery()
                 app.navigation.show(.home)
                 app.navigation.open("sample.neon-grid")
@@ -56,7 +62,8 @@ enum UISnapshots {
     }
 
     private static func capture(_ name: String, to directory: URL) {
-        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 800 }),
+        guard let main = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 800 }),
+              let window = Optional(main.attachedSheet ?? main),
               let view = window.contentView?.superview ?? window.contentView,
               let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
             print("SNAPSHOTS: no window for \(name)")

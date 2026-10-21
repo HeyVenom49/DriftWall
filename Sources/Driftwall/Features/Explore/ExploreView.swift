@@ -10,38 +10,47 @@ struct ExploreView: View {
         let results = app.library.search(query)
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.l) {
-                PageHeader(title: "Explore", subtitle: summary(count: results.count, query: query))
+                PageHeader(title: "Explore", subtitle: summary(count: results.count, query: query)) {
+                    Picker("Sort", selection: $navigation.query.sort) {
+                        ForEach(WallpaperSortOrder.allCases) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .help("Sort order")
+                }
 
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: Theme.Space.s) {
-                        FilterChip(title: "All", isSelected: query.category == nil) { navigation.query.category = nil }
-                        ForEach(app.library.categories, id: \.self) { category in
-                            FilterChip(title: category, isSelected: query.category == category) {
-                                navigation.query.category = query.category == category ? nil : category
+                HStack(spacing: Theme.Space.s) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: Theme.Space.xs) {
+                            FilterChip(title: "All", isSelected: query.category == nil) { navigation.query.category = nil }
+                            ForEach(app.library.categories, id: \.self) { category in
+                                FilterChip(title: category, isSelected: query.category == category) {
+                                    navigation.query.category = query.category == category ? nil : category
+                                }
                             }
                         }
                     }
+                    FiltersMenu(query: $navigation.query)
+                    if !query.isEmpty {
+                        Button("Clear") { navigation.query = SearchQuery(sort: query.sort) }
+                            .help("Clear search text, category and filters")
+                    }
                 }
-
-                FilterBar(query: $navigation.query)
 
                 if results.isEmpty {
                     EmptyStateView(symbol: "magnifyingglass", title: "No wallpapers found",
                                    message: noResultsMessage(query)) {
-                        Button("Clear Search & Filters") { navigation.query = SearchQuery() }
+                        Button("Clear Filters") { navigation.query = SearchQuery(sort: query.sort) }
                         Button("Import Videos…") { app.presentImportPanel() }
                     }
                 } else {
                     WallpaperGrid(wallpapers: results)
+                        .padding(.top, Theme.Space.xs)
                 }
-
-                Text("Search matches words in titles, descriptions, categories and tags on this Mac. It is keyword search, not semantic or AI search.")
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
-                    .padding(.top, Theme.Space.l)
             }
             .padding(Theme.Space.page)
         }
+        .background(Theme.background)
         .navigationTitle("Explore")
     }
 
@@ -53,46 +62,34 @@ struct ExploreView: View {
 
     private func noResultsMessage(_ query: SearchQuery) -> String {
         let text = query.text.trimmingCharacters(in: .whitespaces)
-        if !text.isEmpty { return "Nothing matches “\(text)” with the current filters. Try fewer words or a different spelling." }
+        if !text.isEmpty {
+            return "Nothing matches “\(text)” with the current filters. Search looks at titles, descriptions, categories and tags."
+        }
         return "No wallpapers match the current filters."
     }
 }
 
-private struct FilterBar: View {
+/// Source, resolution and favorites filters in one native menu; the label shows how many are active.
+private struct FiltersMenu: View {
     @Binding var query: SearchQuery
 
     var body: some View {
-        HStack(spacing: Theme.Space.m) {
+        let active = (query.source == nil ? 0 : 1) + (query.minimumResolution == nil ? 0 : 1) + (query.favoritesOnly ? 1 : 0)
+        Menu {
             Picker("Source", selection: $query.source) {
                 Text("All Sources").tag(WallpaperSource?.none)
                 ForEach(WallpaperSource.allCases) { Text($0.displayName).tag(WallpaperSource?.some($0)) }
             }
-            .labelsHidden()
-            .fixedSize()
-
             Picker("Resolution", selection: $query.minimumResolution) {
                 Text("Any Resolution").tag(ResolutionClass?.none)
-                ForEach([ResolutionClass.hd1080, .qhd1440, .uhd4k]) { Text("\($0.label) or higher").tag(ResolutionClass?.some($0)) }
+                ForEach([ResolutionClass.hd1080, .qhd1440, .uhd4k]) { Text("\($0.label) or Higher").tag(ResolutionClass?.some($0)) }
             }
-            .labelsHidden()
-            .fixedSize()
-
+            Divider()
             Toggle("Favorites Only", isOn: $query.favoritesOnly)
-                .toggleStyle(.checkbox)
-
-            Spacer()
-
-            Picker("Sort", selection: $query.sort) {
-                ForEach(WallpaperSortOrder.allCases) { Text($0.label).tag($0) }
-            }
-            .labelsHidden()
-            .fixedSize()
-
-            if !query.isEmpty {
-                Button("Reset") { query = SearchQuery(sort: query.sort) }
-                    .help("Clear search text and filters")
-            }
+        } label: {
+            Label(active == 0 ? "Filters" : "Filters (\(active))", systemImage: "line.3.horizontal.decrease")
         }
-        .controlSize(.regular)
+        .fixedSize()
+        .help("Filter by source, resolution or favorites")
     }
 }

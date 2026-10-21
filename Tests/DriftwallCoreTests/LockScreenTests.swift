@@ -107,10 +107,10 @@ struct LockScreenServiceTests {
     let service: LockScreenWallpaperService
     let video: URL
 
-    init() throws {
+    init() async throws {
         dir = try Fixtures.temporaryDirectory()
         video = dir.appendingPathComponent("source.mov")
-        try Fixtures.makeVideo(at: video)
+        try await Fixtures.makeVideo(at: video)
         service = LockScreenWallpaperService(directory: dir.appendingPathComponent("LockScreen"), system: system, log: DiagnosticsLog(capacity: 10))
     }
 

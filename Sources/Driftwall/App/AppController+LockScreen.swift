@@ -10,6 +10,7 @@ extension AppController {
     }
 
     func refreshLockScreen() {
+        refreshCleanupAgent()
         lockScreen.refresh(settings: settings.lockScreen, targetWallpaperTitle: library.wallpaper(lockScreenTargetID)?.title)
         Task { passwordDelay = await MacLockScreenSystem.passwordDelayDescription() }
     }

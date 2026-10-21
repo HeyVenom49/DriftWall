@@ -15,18 +15,6 @@ struct AdvancedAerialPanel: View {
         let service = app.aerial
         Panel {
             VStack(alignment: .leading, spacing: Theme.Space.m) {
-                HStack(alignment: .top) {
-                    Image(systemName: "sparkles.tv").font(.title2).foregroundStyle(Theme.accent)
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            Text("Animated lock screen").font(.headline)
-                            Badge(text: "BETA")
-                        }
-                        Text("Plays your wallpaper on the lock screen itself, even behind the password prompt, by showing it as one of Apple’s Aerial wallpapers.")
-                            .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                Divider()
                 if let step = app.aerialSetupStep {
                     setupProgress(step)
                 } else if let phase = service.phase {
@@ -121,22 +109,17 @@ struct AdvancedAerialPanel: View {
     private func onView(_ manifest: AerialInstallManifest, replaced: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if replaced {
-                Label("macOS put Apple’s “\(manifest.slotName)” video back. Driftwall puts yours back automatically once macOS has finished downloading it.",
-                      systemImage: "arrow.uturn.backward.circle.fill")
-                    .foregroundStyle(.orange)
+                StatusLabel(kind: .warning, text: "macOS put Apple’s “\(manifest.slotName)” video back. Driftwall puts yours back automatically once macOS has finished downloading it.")
             } else if let missing = app.aerialMissingDisplays, !missing.isEmpty {
                 let total = app.displays.displays.count
-                Label(missing.count == total
-                      ? "“\(manifest.slotName)” isn’t your wallpaper right now, so the lock screen doesn’t play your video."
-                      : "Not playing on \(displayList(missing.map(\.name))): that display shows another wallpaper.",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
+                StatusLabel(kind: .warning, text: missing.count == total
+                            ? "“\(manifest.slotName)” isn’t your wallpaper right now, so the lock screen doesn’t play your video."
+                            : "Not playing on \(displayList(missing.map(\.name))): that display shows another wallpaper.")
                 Button(missing.count == total ? "Choose “\(manifest.slotName)” in Wallpaper Settings" : "Fix in Wallpaper Settings") {
                     app.chooseAerialOnRemainingDisplays()
                 }
             } else {
-                Label("On: your lock screen plays “\(manifest.wallpaperTitle)”.", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(Theme.live)
+                StatusLabel(kind: .live, text: "On: your lock screen plays “\(manifest.wallpaperTitle)”.")
             }
             Text(manifest.followsWallpaper == true
                  ? "It follows your lock-screen wallpaper: when that changes, Driftwall updates it in the background."
@@ -160,11 +143,9 @@ struct AdvancedAerialPanel: View {
     /// they would show the wrong video, and Driftwall won't back them up as originals.
     private func modifiedAerialsView(_ modified: [AerialSlot]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(modified.count == 1
-                  ? "The Aerial “\(modified[0].name)” doesn’t contain Apple’s original video."
-                  : "\(modified.count) Aerials don’t contain Apple’s original video.",
-                  systemImage: "wrench.and.screwdriver.fill")
-                .font(.callout.weight(.medium)).foregroundStyle(.orange)
+            StatusLabel(kind: .warning, text: modified.count == 1
+                        ? "The Aerial “\(modified[0].name)” doesn’t contain Apple’s original video."
+                        : "\(modified.count) Aerials don’t contain Apple’s original video.")
             Text("They were changed outside Driftwall’s install, for example by an older version. Repair puts Apple’s original back: from a copy on this Mac when there is one, otherwise macOS downloads it again.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             ForEach(modified) { slot in
@@ -193,7 +174,7 @@ struct AdvancedAerialPanel: View {
         case .downloading:
             return "Aerials are a few hundred megabytes. Driftwall continues by itself when the download finishes."
         case .addingToDisplays:
-            return "Each display has its own wallpaper, and only displays showing the Aerial play the video on the lock screen. In Wallpaper settings, pick the display at the top, then click the Aerial. Driftwall notices by itself."
+            return "Each display has its own wallpaper, and only displays showing the Aerial play the video on the lock screen. In Wallpaper settings, pick the display, click the Aerial, and turn on “Show on all Spaces” so it stays when you switch Spaces. Driftwall notices by itself."
         }
     }
 

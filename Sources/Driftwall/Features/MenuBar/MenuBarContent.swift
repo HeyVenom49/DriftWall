@@ -9,7 +9,7 @@ struct MenuBarContent: View {
 
     var body: some View {
         if let current = app.currentWallpaper {
-            Text("Now Showing: \(current.title)")
+            Text("On Your Desktop: \(current.title)")
             if let reason = PauseReason.allCases.first(where: app.engine.pauseReasons.contains) {
                 Text("Paused — \(reason.label)")
             }
@@ -45,7 +45,9 @@ struct MenuBarContent: View {
             if app.library.playlists.isEmpty { Text("No playlists yet") }
             ForEach(app.library.playlists) { playlist in
                 let active = app.rotation.isActive && app.rotation.settings.playlistID == playlist.id
-                Button(active ? "✓ \(playlist.name)" : playlist.name) { app.startPlaylist(playlist.id) }
+                Toggle(playlist.name, isOn: Binding(get: { active }, set: { on in
+                    if on { app.startPlaylist(playlist.id) } else { app.rotation.stop() }
+                }))
                     .disabled(playlist.itemIDs.isEmpty)
             }
             if app.rotation.isActive {

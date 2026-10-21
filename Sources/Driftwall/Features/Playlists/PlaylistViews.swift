@@ -8,20 +8,16 @@ struct PlaylistsOverviewView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.l) {
                 PageHeader(title: "Playlists", subtitle: "Rotate through wallpapers automatically") {
-                    Button("New Playlist") {
-                        if let playlist = app.library.createPlaylist(named: "") { app.navigation.show(.playlist(playlist.id)) }
-                    }
+                    Button("New Playlist…") { app.navigation.newPlaylist() }
                     .buttonStyle(.borderedProminent)
                 }
                 if app.library.playlists.isEmpty {
                     EmptyStateView(symbol: "list.bullet.rectangle", title: "No playlists",
                                    message: "Group wallpapers into a playlist, then let Driftwall switch between them on a schedule.") {
-                        Button("Create a Playlist") {
-                            if let playlist = app.library.createPlaylist(named: "") { app.navigation.show(.playlist(playlist.id)) }
-                        }
+                        Button("Create a Playlist…") { app.navigation.newPlaylist() }
                     }
                 } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: Theme.Space.l)], spacing: Theme.Space.l) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: Theme.Space.grid)], alignment: .leading, spacing: Theme.Space.xl) {
                         ForEach(app.library.playlists) { playlist in
                             PlaylistCard(playlist: playlist)
                         }
@@ -30,6 +26,7 @@ struct PlaylistsOverviewView: View {
             }
             .padding(Theme.Space.page)
         }
+        .background(Theme.background)
         .navigationTitle("Playlists")
     }
 }
@@ -54,20 +51,33 @@ private struct PlaylistCard: View {
             }
             .aspectRatio(16 / 9, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).strokeBorder(isRotating ? Theme.live : Theme.stroke, lineWidth: isRotating ? 2 : 1))
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(playlist.name).font(.cardTitle)
-                    Text(isRotating ? "Rotating now" : "\(playlist.itemIDs.count) wallpaper\(playlist.itemIDs.count == 1 ? "" : "s")")
-                        .font(.meta).foregroundStyle(isRotating ? Theme.live : .secondary)
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                    .strokeBorder(Theme.stroke, lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.2), radius: 8, y: 3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(playlist.name)
+                    .font(.cardTitle)
+                    .foregroundStyle(Theme.primaryText)
+                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    if isRotating {
+                        StatusDot(color: app.rotation.settings.isPaused ? Theme.warning : Theme.live)
+                        Text(app.rotation.settings.isPaused ? "Rotation paused" : "Rotating now")
+                        Text("·").foregroundStyle(.tertiary)
+                    }
+                    Text("\(playlist.itemIDs.count) wallpaper\(playlist.itemIDs.count == 1 ? "" : "s")").foregroundStyle(.secondary)
                 }
-                Spacer()
+                .font(.meta)
             }
         }
         .contentShape(Rectangle())
         .onTapGesture { app.navigation.show(.playlist(playlist.id)) }
         .contextMenu {
             Button("Play") { app.startPlaylist(playlist.id) }.disabled(playlist.itemIDs.isEmpty)
+            Button("Rename…") { app.navigation.renamePlaylist(playlist) }
+            Divider()
             Button("Delete Playlist", role: .destructive) { app.deletePlaylist(playlist.id) }
         }
         .accessibilityElement(children: .combine)
@@ -78,7 +88,6 @@ private struct PlaylistCard: View {
 struct PlaylistDetailView: View {
     @Environment(AppController.self) private var app
     let playlistID: String
-    @State private var name = ""
     @State private var showPicker = false
     @State private var confirmDelete = false
     @State private var selection = Set<WallpaperID>()
@@ -99,15 +108,27 @@ struct PlaylistDetailView: View {
         let items = app.library.wallpapers(playlist.itemIDs)
         return VStack(alignment: .leading, spacing: Theme.Space.l) {
             HStack(alignment: .center, spacing: Theme.Space.m) {
-                TextField("Playlist name", text: $name)
+                Text(playlist.name)
                     .font(.pageTitle)
-                    .textFieldStyle(.plain)
-                    .onSubmit { rename(playlist) }
-                    .onChange(of: playlistID, initial: true) { name = playlist.name }
-                    .accessibilityLabel("Playlist name")
+                    .lineLimit(1)
+                    .onTapGesture(count: 2) { app.navigation.renamePlaylist(playlist) }
+                    .help("Double-click to rename")
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityAction(named: "Rename") { app.navigation.renamePlaylist(playlist) }
+                Button {
+                    app.navigation.renamePlaylist(playlist)
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Rename playlist")
+                .accessibilityLabel("Rename playlist")
                 Spacer()
                 Button("Add Wallpapers…") { showPicker = true }
                 Menu {
+                    Button("Rename…") { app.navigation.renamePlaylist(playlist) }
+                    Divider()
                     Button("Delete Playlist…", role: .destructive) { confirmDelete = true }
                 } label: { Image(systemName: "ellipsis.circle") }
                     .menuIndicator(.hidden)
@@ -115,37 +136,38 @@ struct PlaylistDetailView: View {
                     .accessibilityLabel("More")
             }
 
-            Panel {
-                HStack(spacing: Theme.Space.l) {
-                    if isRotating {
-                        Button {
-                            rotation.setPaused(!rotation.settings.isPaused)
-                        } label: {
-                            Label(rotation.settings.isPaused ? "Resume Rotation" : "Pause Rotation", systemImage: rotation.settings.isPaused ? "play.fill" : "pause.fill")
-                        }
+            HStack(spacing: Theme.Space.l) {
+                if isRotating {
+                    Button {
+                        rotation.setPaused(!rotation.settings.isPaused)
+                    } label: {
+                        Label(rotation.settings.isPaused ? "Resume Rotation" : "Pause Rotation", systemImage: rotation.settings.isPaused ? "play.fill" : "pause.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button("Stop") { rotation.stop() }
+                } else {
+                    Button {
+                        app.startPlaylist(playlist.id)
+                    } label: { Label("Play Playlist", systemImage: "play.fill") }
                         .buttonStyle(.borderedProminent)
-                        Button("Stop") { rotation.stop() }
-                    } else {
-                        Button {
-                            app.startPlaylist(playlist.id)
-                        } label: { Label("Play Playlist", systemImage: "play.fill") }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(items.isEmpty)
-                    }
-                    Picker("Change every", selection: Binding(get: { rotation.settings.interval }, set: { rotation.setInterval($0) })) {
-                        ForEach(intervalOptions(current: rotation.settings.interval), id: \.self) { Text(RotationSettings.label(for: $0)).tag($0) }
-                    }
+                        .disabled(items.isEmpty)
+                }
+                Picker("Change every", selection: Binding(get: { rotation.settings.interval }, set: { rotation.setInterval($0) })) {
+                    ForEach(intervalOptions(current: rotation.settings.interval), id: \.self) { Text(RotationSettings.label(for: $0)).tag($0) }
+                }
+                .fixedSize()
+                Toggle("Shuffle", isOn: Binding(get: { rotation.settings.shuffle }, set: { rotation.setShuffle($0) }))
+                    .toggleStyle(.switch)
+                RotationDisplayPicker()
                     .fixedSize()
-                    Toggle("Shuffle", isOn: Binding(get: { rotation.settings.shuffle }, set: { rotation.setShuffle($0) }))
-                        .toggleStyle(.switch)
-                    RotationDisplayPicker()
-                        .fixedSize()
-                    Spacer()
-                    if isRotating {
-                        RotationStatus()
-                    }
+                Spacer()
+                if isRotating {
+                    RotationStatus()
                 }
             }
+            .padding(.horizontal, Theme.Space.m).padding(.vertical, 10)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.section, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.section, style: .continuous).strokeBorder(Theme.stroke))
 
             if items.isEmpty {
                 EmptyStateView(symbol: "plus.rectangle.on.rectangle", title: "This playlist is empty",
@@ -178,11 +200,13 @@ struct PlaylistDetailView: View {
                     app.playlistEdited()
                 }
                 .scrollContentBackground(.hidden)
+                .listStyle(.inset)
                 Text("Drag rows to reorder. Removing an item never deletes the wallpaper or its video.")
                     .font(.footnote).foregroundStyle(.tertiary)
             }
         }
         .padding(Theme.Space.page)
+        .background(Theme.background)
         .navigationTitle(playlist.name)
         .sheet(isPresented: $showPicker) {
             WallpaperPickerSheet(title: "Add to “\(playlist.name)”", excluded: Set(playlist.itemIDs)) { ids in
@@ -195,12 +219,6 @@ struct PlaylistDetailView: View {
         } message: {
             Text("The wallpapers in it stay in your library.")
         }
-        .onDisappear { rename(playlist) }
-    }
-
-    private func rename(_ playlist: Playlist) {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { name = playlist.name } else if trimmed != playlist.name { app.library.renamePlaylist(playlist.id, to: trimmed) }
     }
 
     private func intervalOptions(current: TimeInterval) -> [TimeInterval] {
@@ -244,16 +262,22 @@ private struct PlaylistRow: View {
     var body: some View {
         let available = app.library.isAvailable(wallpaper.id)
         HStack(spacing: Theme.Space.m) {
-            Text("\(index)").font(.meta).foregroundStyle(.secondary).frame(width: 24)
-            ThumbnailView(wallpaper: wallpaper, cornerRadius: 6).frame(width: 96, height: 54)
+            Text("\(index)").font(.meta).foregroundStyle(.tertiary).frame(width: 24)
+            ThumbnailView(wallpaper: wallpaper, cornerRadius: 6)
+                .frame(width: Theme.Size.rowThumbnail.width, height: Theme.Size.rowThumbnail.height)
             VStack(alignment: .leading, spacing: 2) {
-                Text(wallpaper.title).font(.headline)
-                Text(available ? "\(wallpaper.category) · \(wallpaper.durationText)" : "Missing file — skipped during rotation")
-                    .font(.callout).foregroundStyle(available ? Color.secondary : Color.orange)
+                Text(wallpaper.title).font(.body.weight(.semibold))
+                if available {
+                    Text("\(wallpaper.category) · \(wallpaper.durationText)").font(.callout).foregroundStyle(.secondary)
+                } else {
+                    StatusLabel(kind: .warning, text: "Missing file — skipped during rotation", font: .caption)
+                }
             }
             Spacer()
             if isCurrent { LiveBadge() }
-            Button("Apply") { app.apply(wallpaper.id) }.disabled(!available)
+            Button("Set") { app.apply(wallpaper.id) }
+                .disabled(!available)
+                .help("Set as wallpaper now")
             Button(action: remove) { Image(systemName: "minus.circle") }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
@@ -293,7 +317,7 @@ struct WallpaperPickerSheet: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 ThumbnailView(wallpaper: wallpaper)
                                     .aspectRatio(16 / 9, contentMode: .fit)
-                                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(isSelected ? Theme.accent : Theme.stroke, lineWidth: isSelected ? 3 : 1))
+                                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).strokeBorder(isSelected ? Theme.accent : Theme.stroke, lineWidth: isSelected ? 2.5 : 1))
                                     .overlay(alignment: .topTrailing) {
                                         Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                                             .font(.title3).foregroundStyle(isSelected ? Theme.accent : .white)
@@ -346,5 +370,64 @@ struct RotationDisplayPicker: View {
             }
         }
         .help("The display whose wallpaper the playlist changes")
+    }
+}
+
+/// Names a new playlist or renames one. Create/Rename stays disabled until the name has a character
+/// other than spaces.
+struct PlaylistNameSheet: View {
+    @Environment(AppController.self) private var app
+    @Environment(\.dismiss) private var dismiss
+    let request: PlaylistNameRequest
+    @State private var name = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            Text(isRename ? "Rename Playlist" : "New Playlist").font(.headline)
+            TextField("Name", text: $name, prompt: Text("Playlist name"))
+                .textFieldStyle(.roundedBorder)
+                .focused($focused)
+                .onSubmit { if !trimmed.isEmpty { confirm(trimmed) } }
+            if case .create(let items) = request, !items.isEmpty {
+                Text("Starts with \(items.count) wallpaper\(items.count == 1 ? "" : "s").")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button(isRename ? "Rename" : "Create") { confirm(trimmed) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(trimmed.isEmpty)
+            }
+        }
+        .padding(Theme.Space.xl)
+        .frame(width: 360)
+        .onAppear {
+            if case .rename(_, let current) = request { name = current }
+            focused = true
+        }
+    }
+
+    private var isRename: Bool {
+        if case .rename = request { return true }
+        return false
+    }
+
+    private func confirm(_ trimmed: String) {
+        switch request {
+        case .create(let items):
+            if let playlist = app.library.createPlaylist(named: trimmed, items: items) {
+                app.navigation.show(.playlist(playlist.id))
+                if !items.isEmpty { app.showBanner(.success, "Created “\(playlist.name)”.") }
+            } else {
+                app.showBanner(.error, "The playlist couldn’t be created.")
+            }
+        case .rename(let id, _):
+            app.library.renamePlaylist(id, to: trimmed)
+        }
+        dismiss()
     }
 }

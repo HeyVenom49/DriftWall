@@ -24,9 +24,11 @@ extension AppController {
 
     func refreshAerial() {
         aerial.refresh()
+        refreshCleanupAgent()
         if let id = aerial.manifest?.slotID {
             let connected = displays.displays
-            aerialMissingDisplays = AerialWallpaperStore.displays(showing: id, among: connected.map(\.id))
+            aerialMissingDisplays = AerialWallpaperStore.displays(showing: id, among: connected.map(\.id),
+                                                                  currentSpaces: AerialWallpaperSelection.currentSpaces(mainDisplayID: connected.first { $0.isMain }?.id))
                 .map { showing in connected.filter { !showing.contains($0.id) } }
         } else {
             aerialMissingDisplays = nil

@@ -27,7 +27,7 @@ struct ThumbnailView: View {
                 .clipped()
             if image == nil, failed || !availability.isAvailable {
                 Image(systemName: availability.isAvailable ? "photo" : "exclamationmark.triangle")
-                    .font(.system(size: 22, weight: .light))
+                    .font(.system(size: 20, weight: .light))
                     .foregroundStyle(.secondary)
             }
             if !availability.isAvailable {
@@ -35,10 +35,10 @@ struct ThumbnailView: View {
                     Spacer()
                     Label(availability.statusText, systemImage: "questionmark.folder")
                         .font(.meta)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(.black.opacity(0.65), in: Capsule())
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(.black.opacity(0.6), in: Capsule())
                         .foregroundStyle(.white)
-                        .padding(8)
+                        .padding(6)
                 }
             }
         }
@@ -50,7 +50,7 @@ struct ThumbnailView: View {
             }
             image = nil
             let loaded = await app.thumbnailLoader.image(for: wallpaper, mediaURL: availability.url)
-            withAnimation(.easeOut(duration: 0.2)) {
+            withAnimation(.easeOut(duration: Theme.Motion.standard)) {
                 image = loaded
                 failed = loaded == nil
             }
@@ -61,78 +61,111 @@ struct ThumbnailView: View {
 
 // MARK: - Card
 
+/// A wallpaper in a grid or shelf: the artwork is the focus; status is a small dot, actions appear on hover.
 struct WallpaperCard: View {
     @Environment(AppController.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let wallpaper: Wallpaper
     var width: CGFloat? = nil
     @State private var isHovering = false
     @State private var showPreview = false
     @State private var preview = PreviewPlayer()
     @State private var hoverTask: Task<Void, Never>?
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         let isLive = !app.displaysShowing(wallpaper.id).isEmpty
         let isFavorite = app.library.isFavorite(wallpaper.id)
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            ZStack(alignment: .topLeading) {
+        let available = app.library.isAvailable(wallpaper.id)
+        VStack(alignment: .leading, spacing: 7) {
+            ZStack {
                 ThumbnailView(wallpaper: wallpaper)
                 if showPreview, let player = preview.player {
                     PlayerLayerView(player: player)
                         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
                         .transition(.opacity)
                 }
-                HStack(spacing: 6) {
-                    if isLive { LiveBadge() }
-                    if wallpaper.resolutionClass >= .uhd4k { Badge(text: wallpaper.resolutionClass.label) }
-                    Spacer()
-                    if isFavorite {
-                        Image(systemName: "heart.fill")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(6)
-                            .background(.black.opacity(0.45), in: Circle())
-                            .accessibilityLabel("Favorite")
-                    }
-                }
-                .padding(8)
                 if isHovering {
+                    LinearGradient(colors: [.clear, .black.opacity(0.38)], startPoint: .center, endPoint: .bottom)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
+                VStack {
                     HStack(spacing: 6) {
-                        Spacer()
-                        CardIconButton(symbol: isFavorite ? "heart.slash" : "heart", help: isFavorite ? "Remove from Favorites" : "Add to Favorites") {
-                            app.library.toggleFavorite(wallpaper.id)
+                        if isLive {
+                            StatusDot(color: Theme.live)
+                                .padding(5)
+                                .background(.black.opacity(0.40), in: Circle())
                         }
-                        CardIconButton(symbol: "play.desktopcomputer", help: "Apply as Wallpaper") {
-                            app.apply(wallpaper.id)
+                        Spacer()
+                        if isFavorite && !isHovering {
+                            Image(systemName: "heart.fill")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(5)
+                                .background(.black.opacity(0.40), in: Circle())
                         }
                     }
-                    .padding(8)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                    .transition(.opacity)
+                    Spacer()
+                    if isHovering {
+                        HStack(spacing: 6) {
+                            Spacer()
+                            CardIconButton(symbol: isFavorite ? "heart.fill" : "heart",
+                                           help: isFavorite ? "Remove from Favorites" : "Add to Favorites") {
+                                app.library.toggleFavorite(wallpaper.id)
+                            }
+                            if available {
+                                CardIconButton(symbol: "play.desktopcomputer", help: "Set as Wallpaper") {
+                                    app.apply(wallpaper.id)
+                                }
+                            }
+                        }
+                        .transition(.opacity)
+                    }
                 }
+                .padding(6)
             }
             .aspectRatio(16 / 9, contentMode: .fit)
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                    .strokeBorder(isLive ? Theme.live.opacity(0.9) : Theme.stroke, lineWidth: isLive ? 2 : 1)
+                    .strokeBorder(isFocused ? Theme.accent.opacity(0.9) : Theme.stroke, lineWidth: isFocused ? 1.5 : 0.5)
             )
-            .shadow(color: .black.opacity(isHovering ? 0.35 : 0.15), radius: isHovering ? 14 : 6, y: isHovering ? 8 : 3)
-            .scaleEffect(isHovering ? 1.015 : 1)
+            .shadow(color: .black.opacity(isHovering ? 0.28 : 0.12), radius: isHovering ? 10 : 4, y: isHovering ? 4 : 2)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(wallpaper.title)
                     .font(.cardTitle)
+                    .foregroundStyle(Theme.primaryText)
                     .lineLimit(1)
-                Text(subtitle)
-                    .font(.meta)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    if isLive {
+                        Text("Live").foregroundStyle(Theme.live)
+                        Text("·").foregroundStyle(.tertiary)
+                    }
+                    Text(subtitle).foregroundStyle(Theme.secondaryText)
+                }
+                .font(.meta)
+                .lineLimit(1)
             }
-            .padding(.horizontal, 2)
+            .padding(.horizontal, 1)
         }
         .frame(width: width)
         .contentShape(Rectangle())
+        .focusable()
+        .focused($isFocused)
+        .focusEffectDisabled()
+        .onKeyPress(.return) {
+            app.navigation.open(wallpaper.id)
+            return .handled
+        }
+        .onKeyPress(.space) {
+            guard available else { return .ignored }
+            app.apply(wallpaper.id)
+            return .handled
+        }
         .onHover(perform: hover)
-        .animation(.easeOut(duration: 0.18), value: isHovering)
+        .animation(Theme.Motion.ease(Theme.Motion.quick, reduceMotion: reduceMotion), value: isHovering)
         .onTapGesture { app.navigation.open(wallpaper.id) }
         .contextMenu { WallpaperActions(wallpaper: wallpaper) }
         .onDisappear { endPreview() }
@@ -140,8 +173,9 @@ struct WallpaperCard: View {
         .accessibilityLabel("\(wallpaper.title), \(wallpaper.category)\(isLive ? ", currently live" : "")\(isFavorite ? ", favorite" : "")")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { app.navigation.open(wallpaper.id) }
-        .accessibilityAction(named: "Apply") { app.apply(wallpaper.id) }
+        .accessibilityAction(named: "Set as Wallpaper") { app.apply(wallpaper.id) }
         .accessibilityAction(named: isFavorite ? "Remove from Favorites" : "Add to Favorites") { app.library.toggleFavorite(wallpaper.id) }
+        .help("\(wallpaper.title) — press Return for details, Space to set as wallpaper")
     }
 
     private var subtitle: String {
@@ -164,7 +198,7 @@ struct WallpaperCard: View {
             try? await Task.sleep(for: .milliseconds(450))
             guard !Task.isCancelled else { return }
             preview.load(url)
-            withAnimation(.easeIn(duration: 0.25)) { showPreview = true }
+            withAnimation(Theme.Motion.ease(reduceMotion: reduceMotion)) { showPreview = true }
         }
     }
 
@@ -183,9 +217,10 @@ struct CardIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .frame(width: 28, height: 28)
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: Theme.Size.iconButton, height: Theme.Size.iconButton)
                 .background(.ultraThinMaterial, in: Circle())
+                .environment(\.colorScheme, .dark)
         }
         .buttonStyle(.plain)
         .help(help)
@@ -193,26 +228,114 @@ struct CardIconButton: View {
     }
 }
 
+// MARK: - Status
+
+/// Small round status indicator.
+struct StatusDot: View {
+    var color: Color = Theme.live
+    var body: some View {
+        Circle().fill(color).frame(width: Theme.Size.statusDot, height: Theme.Size.statusDot)
+            .accessibilityHidden(true)
+    }
+}
+
+enum StatusKind {
+    case live, info, warning, error, neutral
+
+    var color: Color {
+        switch self {
+        case .live: return Theme.live
+        case .info: return Theme.accent
+        case .warning: return Theme.warning
+        case .error: return Theme.danger
+        case .neutral: return .secondary
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .live: return "checkmark.circle.fill"
+        case .info: return "info.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .error: return "xmark.octagon.fill"
+        case .neutral: return "circle"
+        }
+    }
+}
+
+/// One line of status: a colored symbol and text.
+struct StatusLabel: View {
+    let kind: StatusKind
+    let text: String
+    var font: Font = .callout
+
+    var body: some View {
+        Label {
+            Text(text).foregroundStyle(kind == .neutral ? .secondary : .primary)
+        } icon: {
+            Image(systemName: kind.symbol).foregroundStyle(kind.color)
+        }
+        .font(font)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// A callout for information that needs attention, with optional actions. Replaces boxed "info panels".
+struct InlineNotice<Actions: View>: View {
+    let kind: StatusKind
+    let title: String
+    var message: String? = nil
+    @ViewBuilder var actions: Actions
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Theme.Space.m) {
+            Image(systemName: kind.symbol)
+                .foregroundStyle(kind.color)
+                .font(.system(size: 14))
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.callout.weight(.semibold))
+                if let message {
+                    Text(message).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: Theme.Space.m)
+            HStack(spacing: Theme.Space.s) { actions }
+        }
+        .padding(.horizontal, Theme.Space.m).padding(.vertical, 10)
+        .background(kind.color.opacity(0.09), in: RoundedRectangle(cornerRadius: Theme.Radius.section, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.section, style: .continuous).strokeBorder(kind.color.opacity(0.18)))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+extension InlineNotice where Actions == EmptyView {
+    init(kind: StatusKind, title: String, message: String? = nil) {
+        self.init(kind: kind, title: title, message: message) { EmptyView() }
+    }
+}
+
+/// Small neutral text tag (category, source).
 struct Badge: View {
     let text: String
     var body: some View {
         Text(text)
-            .font(.system(size: 10, weight: .bold))
-            .padding(.horizontal, 6).padding(.vertical, 3)
-            .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-            .foregroundStyle(.white)
+            .font(.system(size: 10, weight: .semibold))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .foregroundStyle(.secondary)
     }
 }
 
+/// "Live" status tag.
 struct LiveBadge: View {
     var body: some View {
-        HStack(spacing: 4) {
-            Circle().fill(Theme.live).frame(width: 6, height: 6)
-            Text("LIVE").font(.system(size: 10, weight: .heavy))
+        HStack(spacing: 5) {
+            StatusDot(color: Theme.live)
+            Text("Live").font(.system(size: 11, weight: .semibold))
         }
-        .padding(.horizontal, 6).padding(.vertical, 3)
-        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-        .foregroundStyle(.white)
+        .foregroundStyle(Theme.live)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Live on desktop")
     }
 }
@@ -226,10 +349,10 @@ struct WallpaperActions: View {
 
     var body: some View {
         let available = app.library.isAvailable(wallpaper.id)
-        Button("Apply to All Displays") { app.apply(wallpaper.id, target: .allDisplays) }
+        Button("Set as Wallpaper on All Displays") { app.apply(wallpaper.id, target: .allDisplays) }
             .disabled(!available)
         if app.displays.displays.count > 1 {
-            Menu("Apply to Display") {
+            Menu("Set as Wallpaper On") {
                 ForEach(app.displays.displays) { display in
                     Button(display.name) { app.apply(wallpaper.id, target: .display(id: display.id)) }
                 }
@@ -274,11 +397,7 @@ struct AddToPlaylistMenu: View {
                 .disabled(contained)
             }
             if !app.library.playlists.isEmpty { Divider() }
-            Button("New Playlist…") {
-                if let playlist = app.library.createPlaylist(named: "", items: wallpaperIDs) {
-                    app.navigation.show(.playlist(playlist.id))
-                }
-            }
+            Button("New Playlist…") { app.navigation.newPlaylist(with: wallpaperIDs) }
         }
     }
 }
@@ -291,7 +410,8 @@ struct WallpaperGrid: View {
 
     var body: some View {
         let width = app.settings.gridDensity.minimumCardWidth
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: width, maximum: width * 1.6), spacing: Theme.Space.l)], alignment: .leading, spacing: Theme.Space.l) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: width, maximum: width * 1.65), spacing: Theme.Space.grid)],
+                  alignment: .leading, spacing: Theme.Space.l + 4) {
             ForEach(wallpapers) { wallpaper in
                 WallpaperCard(wallpaper: wallpaper)
             }
@@ -299,6 +419,7 @@ struct WallpaperGrid: View {
     }
 }
 
+/// A horizontal row of wallpapers on Home.
 struct ShelfRow: View {
     let title: String
     var subtitle: String? = nil
@@ -307,16 +428,16 @@ struct ShelfRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
-            SectionHeader(title: title, subtitle: subtitle, actionTitle: seeAll == nil ? nil : "See All", action: seeAll)
+            SectionHeader(title: title, subtitle: subtitle, actionTitle: seeAll == nil ? nil : "Show All", action: seeAll)
                 .padding(.horizontal, Theme.Space.page)
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: Theme.Space.l) {
+                LazyHStack(alignment: .top, spacing: Theme.Space.grid) {
                     ForEach(wallpapers) { wallpaper in
-                        WallpaperCard(wallpaper: wallpaper, width: 250)
+                        WallpaperCard(wallpaper: wallpaper, width: Theme.Size.shelfItem)
                     }
                 }
                 .padding(.horizontal, Theme.Space.page)
-                .padding(.vertical, 6)
+                .padding(.vertical, 2)
             }
         }
     }
@@ -330,15 +451,20 @@ struct SectionHeader: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.sectionTitle)
-                if let subtitle { Text(subtitle).font(.callout).foregroundStyle(.secondary) }
+            Text(title)
+                .font(.sectionTitle)
+                .foregroundStyle(Theme.primaryText)
+            if let subtitle {
+                Text(subtitle)
+                    .font(.callout)
+                    .foregroundStyle(Theme.secondaryText)
             }
             Spacer()
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
-                    .buttonStyle(.link)
-                    .foregroundStyle(Theme.accent)
+                    .buttonStyle(.plain)
+                    .font(.callout)
+                    .foregroundStyle(Theme.secondaryText)
             }
         }
         .accessibilityElement(children: .combine)
@@ -346,21 +472,28 @@ struct SectionHeader: View {
     }
 }
 
+/// Title, optional subtitle and trailing controls at the top of a page.
 struct PageHeader<Accessory: View>: View {
     let title: String
     var subtitle: String? = nil
     @ViewBuilder var accessory: Accessory
 
     var body: some View {
-        HStack(alignment: .bottom) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.pageTitle)
-                if let subtitle { Text(subtitle).foregroundStyle(.secondary) }
+        HStack(alignment: .center, spacing: Theme.Space.l) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.pageTitle)
+                    .foregroundStyle(Theme.primaryText)
+                    .accessibilityAddTraits(.isHeader)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.callout)
+                        .foregroundStyle(Theme.secondaryText)
+                }
             }
-            Spacer()
+            Spacer(minLength: Theme.Space.l)
             accessory
         }
-        .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -379,23 +512,27 @@ struct EmptyStateView<Actions: View>: View {
     var body: some View {
         VStack(spacing: Theme.Space.m) {
             Image(systemName: symbol)
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(Theme.accent)
-                .padding(.bottom, 4)
-            Text(title).font(.title3.weight(.semibold))
+                .font(.system(size: 32, weight: .ultraLight))
+                .foregroundStyle(Theme.secondaryText.opacity(0.7))
+                .padding(.bottom, 2)
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(Theme.primaryText)
             Text(message)
-                .foregroundStyle(.secondary)
+                .font(.callout)
+                .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
+                .frame(maxWidth: 380)
             HStack(spacing: Theme.Space.s) { actions }
                 .padding(.top, 6)
         }
-        .padding(40)
-        .frame(maxWidth: .infinity, minHeight: 280)
+        .padding(Theme.Space.xxl)
+        .frame(maxWidth: .infinity, minHeight: 240)
         .accessibilityElement(children: .contain)
     }
 }
 
+/// A selectable filter token (categories).
 struct FilterChip: View {
     let title: String
     let isSelected: Bool
@@ -404,75 +541,101 @@ struct FilterChip: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .padding(.horizontal, 12).padding(.vertical, 6)
-                .background(isSelected ? Theme.accent : Theme.surfaceRaised, in: Capsule())
-                .foregroundStyle(isSelected ? Color.black : Color.primary)
-                .overlay(Capsule().strokeBorder(Theme.stroke))
+                .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+                .padding(.horizontal, 11).padding(.vertical, 5)
+                .background(
+                    isSelected ? Theme.surfaceRaised : Color.clear,
+                    in: RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                        .strokeBorder(isSelected ? Theme.strokeStrong : Color.clear)
+                )
+                .foregroundStyle(isSelected ? Theme.primaryText : Theme.secondaryText)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
+/// Toolbar-style menu for grid size, shared by the grid pages.
+struct ViewOptionsMenu: View {
+    @Environment(AppController.self) private var app
+
+    var body: some View {
+        Menu {
+            Picker("Thumbnail Size", selection: Binding(get: { app.settings.gridDensity }, set: { app.settings.gridDensity = $0 })) {
+                ForEach(GridDensity.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.inline)
+            Divider()
+            Toggle("Play Previews on Hover", isOn: Binding(get: { app.settings.hoverPreviews }, set: { app.settings.hoverPreviews = $0 }))
+        } label: {
+            Label("View Options", systemImage: "square.grid.2x2")
+        }
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Thumbnail size and previews")
+    }
+}
+
+/// Transient feedback at the bottom of the window (apply results, import results).
 struct BannerView: View {
     let banner: Banner
     let dismiss: () -> Void
 
     var body: some View {
         HStack(spacing: Theme.Space.m) {
-            Image(systemName: symbol).foregroundStyle(color)
+            Image(systemName: kind.symbol).foregroundStyle(kind.color)
             Text(banner.message).font(.callout).fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
+            Spacer(minLength: Theme.Space.s)
             Button(action: dismiss) { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("Dismiss")
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
-        .frame(maxWidth: 560)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(color.opacity(0.35)))
-        .shadow(color: .black.opacity(0.25), radius: 16, y: 6)
+        .frame(maxWidth: 520)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Theme.Radius.section, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.section, style: .continuous).strokeBorder(Theme.stroke))
+        .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
         .accessibilityElement(children: .combine)
     }
 
-    private var symbol: String {
+    private var kind: StatusKind {
         switch banner.kind {
-        case .info: return "info.circle.fill"
-        case .success: return "checkmark.circle.fill"
-        case .error: return "exclamationmark.triangle.fill"
-        }
-    }
-
-    private var color: Color {
-        switch banner.kind {
-        case .info: return .blue
-        case .success: return Theme.live
-        case .error: return .orange
+        case .info: return .info
+        case .success: return .live
+        case .error: return .warning
         }
     }
 }
 
+/// A label above a value (detail metadata).
 struct MetadataItem: View {
     let label: String
     let value: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(label.uppercased()).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
-            Text(value).font(.system(size: 13, weight: .medium).monospacedDigit()).textSelection(.enabled)
+            Text(label.uppercased()).font(.eyebrow).foregroundStyle(.tertiary)
+            Text(value).font(.system(size: 12, weight: .medium).monospacedDigit()).textSelection(.enabled)
         }
         .accessibilityElement(children: .combine)
     }
 }
 
+/// A grouped section surface. Use for one group of related controls; never nest them.
 struct Panel<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         content
             .padding(Theme.Space.l)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).strokeBorder(Theme.stroke))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.section, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.section, style: .continuous)
+                    .strokeBorder(Theme.stroke, lineWidth: 0.5)
+            )
     }
 }

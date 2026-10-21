@@ -1,5 +1,66 @@
 # Changelog
 
+## 1.3.0 — 2026-10-21
+
+### Added
+- **Everything Driftwall changes outside its own folders can be undone, even after the app is
+  deleted.**
+  - **Settings › General › Changes Outside Driftwall** lists what's in place and has **Undo All
+    System Changes…**: Apple's original Aerial, the default screen saver, your original desktop
+    pictures, and no login item.
+  - While any of those changes are in place, a small cleanup task (a per-user LaunchAgent and a
+    script) is installed. If Driftwall.app is gone for 10 minutes, it undoes them and removes itself.
+  - It does nothing while the app exists anywhere (found by bundle identifier if moved), or while the
+    drive it was on is unplugged; an app in the Trash counts as deleted. A failed step is retried.
+  - Driftwall now records each display's own desktop picture before it first replaces it, so it can
+    be put back. Before, it couldn't.
+- **Naming playlists.** New Playlist asks for a name. Rename… is in the playlist's menu and in
+  right-click menus, and is also reached with the pencil button or by double-clicking the title.
+
+### Changed — interface redesign
+A visual and interaction redesign of every screen. Services, persistence and system integration are
+unchanged; every control still calls the same `AppController` actions.
+
+- **Design system:** one interaction accent, the system accent color, so it follows System Settings.
+  Green, orange and red are used only for status. Deep-charcoal neutrals instead of near-black.
+  Tokens for type, spacing, radii, sizes and motion; animations respect Reduce Motion. New shared
+  components: `StatusDot`, `StatusLabel`, `InlineNotice` and `ViewOptionsMenu`.
+- **Window:**
+  - The sidebar has three groups: Browse (Home, Explore, Favorites, Recent); Library (My Videos and
+    Playlists, with each playlist nested); and System (Displays, Lock Screen). Settings and a
+    slimmer now-playing strip sit at the bottom.
+- **Visual polish (follow-up):** tighter charcoal palette with dedicated sidebar / text tokens,
+  lighter thumbnail hover chrome, softer strokes and shadows so artwork stays the focus, and clearer
+  Lock Screen copy that distinguishes live Aerial playback from screen-saver stills.
+  - The toolbar is contextual: Pause/Next only while a live wallpaper runs, View Options only on grid
+    pages, Import always.
+- **Wallpaper cards:**
+  - The artwork comes first. Live is a small green dot plus "Live" in the subtitle, instead of a
+    thick border and badges. Actions appear on hover; no shadows or scaling.
+  - Cards are keyboard-focusable: Tab moves between them, Return opens, Space sets as wallpaper.
+- **Home:** a compact "On your desktop" strip with real playback status replaces the 360 pt hero, so
+  the library shows on the first screen. The "Popular" shelf, ranked by a curated value rather than
+  real usage, is removed.
+- **Explore:** category tokens, one Filters menu (source, resolution, favorites) that shows how many
+  are active, sorting in the header, and Clear Filters only when something is filtered.
+- **Detail:** the large preview dominates. Below it, Set as Wallpaper with its display target,
+  Favorite, Add to Playlist and a More menu, live status per display, and a compact metadata grid.
+  There's no boxed form any more.
+- **Displays:** one row per display with its wallpaper, real status, Choose Wallpaper and Make Default
+  Target. The arrangement drawing marks the default target. The outdated "the lock screen can't show
+  live video" note is replaced.
+- **Lock Screen:**
+  - Two clearly explained options: Animated Lock Screen (behind the password prompt) and Screen
+    Saver Video (the password prompt appears over a still picture).
+  - The capability list is corrected: video behind the password prompt is possible with the Animated
+    Lock Screen, while Driftwall drawing on the password screen itself isn't. Previews are labelled
+    as previews of the video, not of the lock screen.
+- **Settings:** General, Appearance, Playback (now including rotation), Displays, a new Lock Screen
+  pane, Library & Cache, Shortcuts and About (version plus diagnostics).
+- **Menu bar:** what's on the desktop, Pause/Next/Previous, Recent, Favorites and Playlists (as
+  checkmarks; unchecking stops rotation), Lock Screen Now, then Open, Settings and Quit.
+- **⌘F** now also puts the cursor in the search field on macOS 15 and later.
+
 ## 1.2.2 — 2026-10-21
 
 ### Fixed
@@ -10,6 +71,42 @@
   - Setup only finishes once all of them show the Aerial: it names the displays still missing and
     waits while you choose the Aerial for each one in Wallpaper settings.
   - The panel also names any display that stops showing it, for example a newly connected monitor.
+- **Second display never detected (setup kept waiting).** With "Show on all Spaces" off, macOS saves
+  a display's wallpaper for its current Space only, and Driftwall only read the per-display entry. It
+  now reads which Space each display shows (`com.apple.spaces`) and checks that Space's choice first.
+- **Lock screen black on some locks (likely cause fixed; to be confirmed on the lock screen).**
+  macOS's Aerial player restarts reading at keyframes when it speeds the video up or slows it down
+  around lock and unlock. Driftwall's files came from an export preset with an *open GOP*: CRA
+  keyframes followed by RASL frames that depend on the previous GOP and can't be decoded from that
+  keyframe.
+  - The player logged "failed to acquire next sample" on unlock, and on the next lock only one of the
+    three players started again. Apple's own Aerials use closed GOPs (IDR keyframes) and never showed
+    those errors.
+  - Driftwall now encodes with VideoToolbox directly, with open GOP off (keyframes every 2 s). It
+    still produces 8-bit HEVC at the source's frame rate in a 600 timescale, the format macOS plays.
+  - The closed GOP alone didn't stop the read errors (3 in 4 locks, against 0 in 5 with Apple's
+    file). They happen as the player starts slowing the video down. Driftwall now also tags every
+    frame with HEVC temporal-layer information, so the file carries the `tscl`/`tsas` sample groups
+    Apple's Aerials have.
+  - Converting a 141 s 4K Aerial took about 2.5 minutes on the test Mac.
+- **Lock screen still for a few seconds after a quick re-lock: macOS behaviour.** What's known (macOS 27.0.1):
+  - Locking again within a few seconds of unlocking shows a still image for about 4–5 seconds. The
+    video then plays. macOS does the same with Apple's own Aerial (compared on the same Mac): its
+    player ignores "play" until it has finished easing to a still, which takes about 6 s.
+  - Converting with AVAssetWriter to mirror Apple's files (HEVC Main10, 240000 timescale, Apple's
+    length, optionally 240 fps) left the lock screen black on both displays. Driftwall keeps the HEVC
+    export preset, whose files play.
+- **Safer Aerial writes (code review).**
+  - Every change to an Aerial first keeps a snapshot of its current video. It's an APFS clone, so it's
+    instant and takes no extra space. A failed or incomplete write puts it back. Before, Restore and
+    Repair could leave an empty or partial Aerial.
+  - An install whose record can't be written also puts the Aerial back, so the file and Driftwall's
+    record never disagree.
+  - Starting a change while another is running is now an error. Before, it was silently ignored and
+    reported as done.
+  - The most specific wallpaper entry wins, so an "all displays" choice can't hide a display's own
+    Aerial.
+  - A damaged record can't point Driftwall at files outside its backup folder.
 - **Restore could put the wrong video back.** If an Aerial had already been changed (by hand, or by an
   earlier version), installing over it backed up that changed file as "Apple's original", and Restore
   then brought back the changed video.
