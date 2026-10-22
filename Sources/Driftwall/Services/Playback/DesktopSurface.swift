@@ -15,6 +15,8 @@ final class DesktopWallpaperWindow: NSWindow {
         ignoresMouseEvents = true
         isExcludedFromWindowsMenu = true
         animationBehavior = .none
+        // Hiding Driftwall (⌘H) hides its own windows; the wallpaper must stay on the desktop.
+        canHide = false
         // Present on every Space, unaffected by Exposé/Mission Control and never part of window cycling.
         collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
         setShowsDesktopIcons(true)

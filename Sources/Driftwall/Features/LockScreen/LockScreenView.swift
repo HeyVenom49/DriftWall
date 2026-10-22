@@ -121,7 +121,7 @@ struct LockScreenView: View {
                             if let target {
                                 ThumbnailView(wallpaper: target)
                                 if let player = preview.player {
-                                    PlayerLayerView(player: player)
+                                    PlayerLayerView(player: player, onVisibilityChange: preview.setVisible)
                                         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
                                 }
                             } else {

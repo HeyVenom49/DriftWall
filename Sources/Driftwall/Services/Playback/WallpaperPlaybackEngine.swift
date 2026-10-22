@@ -60,6 +60,9 @@ final class WallpaperPlaybackEngine {
     private(set) var surfaceStates: [String: SurfaceState] = [:]
     private(set) var pauseReasons: Set<PauseReason> = []
     private(set) var activePlayerCount = 0
+    /// Wallpapers on at least one display. Separate from `surfaceStates` so views that only ask
+    /// "is this one live?" (every grid card) aren't invalidated by pause, resume or loading changes.
+    private(set) var liveWallpaperIDs: Set<WallpaperID> = []
 
     var gravity: VideoGravity = .fill { didSet { applyPresentationSettings() } }
     var showDesktopIcons = true { didSet { applyPresentationSettings() } }
@@ -125,6 +128,7 @@ final class WallpaperPlaybackEngine {
         players.values.forEach { $0.invalidate() }
         players.removeAll()
         surfaceStates.removeAll()
+        liveWallpaperIDs.removeAll()
         activePlayerCount = 0
     }
 
@@ -196,6 +200,8 @@ final class WallpaperPlaybackEngine {
             }
         }
         if states != surfaceStates { surfaceStates = states }
+        let live = Set(states.values.map(\.wallpaperID))
+        if live != liveWallpaperIDs { liveWallpaperIDs = live }
         if playing != activePlayerCount { activePlayerCount = playing }
     }
 

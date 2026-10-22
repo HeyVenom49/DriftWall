@@ -86,8 +86,8 @@ scripts/package_release.sh    # dist/Driftwall-<version>.dmg (universal), .sha25
 The version comes from the newest entry in `CHANGELOG.md`. Publish it as a GitHub release:
 
 ```bash
-gh release create v1.3.0 dist/Driftwall-1.3.0.dmg dist/Driftwall-1.3.0.dmg.sha256 \
-  --title "Driftwall 1.3.0" --notes-file dist/RELEASE_NOTES-1.3.0.md
+gh release create v1.3.1 dist/Driftwall-1.3.1.dmg dist/Driftwall-1.3.1.dmg.sha256 \
+  --title "Driftwall 1.3.1" --notes-file dist/RELEASE_NOTES-1.3.1.md
 ```
 
 Releases are ad-hoc signed, which costs nothing. Users approve the app once, as described under

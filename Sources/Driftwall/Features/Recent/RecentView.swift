@@ -58,7 +58,7 @@ private struct RecentRow: View {
 
     var body: some View {
         let availability = app.library.availabilityOf(wallpaper.id)
-        let isLive = !app.displaysShowing(wallpaper.id).isEmpty
+        let isLive = app.isLive(wallpaper.id)
         HStack(spacing: Theme.Space.m) {
             ThumbnailView(wallpaper: wallpaper, cornerRadius: 6)
                 .frame(width: Theme.Size.rowThumbnail.width, height: Theme.Size.rowThumbnail.height)

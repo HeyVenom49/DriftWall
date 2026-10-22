@@ -65,6 +65,11 @@ enum SmokeTest {
         let image = await app.thumbnailLoader.image(for: sample, mediaURL: library.mediaURL(for: sample.id))
         check(image != nil, "thumbnail generated")
         check(FileManager.default.fileExists(atPath: app.thumbnails.thumbnailURL(for: sample.id).path), "thumbnail cached on disk")
+        app.thumbnailLoader.clearMemory()
+        async let first = app.thumbnailLoader.image(for: sample, mediaURL: library.mediaURL(for: sample.id))
+        async let second = app.thumbnailLoader.image(for: sample, mediaURL: library.mediaURL(for: sample.id))
+        let (a, b) = await (first, second)
+        check(a != nil && a === b, "concurrent thumbnail requests share one load")
 
         // Search
         check(library.search(SearchQuery(text: "auro")).first?.id == sample.id, "prefix search finds Aurora")
@@ -101,8 +106,43 @@ enum SmokeTest {
             app.settings.displayMode = .mirror
             expect(await wait { Set(app.engine.surfaceStates.values.map(\.wallpaperID)).count == 1 }, "mirror mode shows one wallpaper everywhere")
             app.settings.displayMode = .perDisplay
+            check(PlaybackDiagnostics.live[.desktop] == Set(app.engine.surfaceStates.values.map(\.wallpaperID)).count,
+                  "replaced decoders are released (\(PlaybackDiagnostics.summary))")
         } else {
             print("SMOKE info single display: per-display assignment not exercised")
+        }
+
+        // In-window preview: holds its decoder while its window can't be seen, keeps the user's choice.
+        if let url = library.mediaURL(for: "sample.neon-grid") {
+            let previewsBefore = PlaybackDiagnostics.live[.preview, default: 0]
+            let preview = PreviewPlayer()
+            preview.load(url)
+            expect(await wait { (preview.player?.rate ?? 0) > 0 }, "preview plays")
+            preview.setVisible(false)
+            check(preview.player?.rate == 0 && preview.isPlaying && preview.isSuspended, "hidden preview stops decoding but stays 'playing'")
+            preview.setVisible(true)
+            check((preview.player?.rate ?? 0) > 0 && !preview.isSuspended, "preview resumes when visible again")
+            preview.pause()
+            preview.setVisible(false)
+            preview.setVisible(true)
+            check(preview.player?.rate == 0 && !preview.isPlaying, "a preview paused by the user stays paused after hiding")
+            preview.stop()
+            check(preview.player == nil && PlaybackDiagnostics.live[.preview, default: 0] == previewsBefore, "stopped preview releases its decoder")
+
+            // Only the newest preview decodes; the older one resumes when it ends.
+            let page = PreviewPlayer(), hover = PreviewPlayer()
+            page.load(url)
+            expect(await wait { (page.player?.rate ?? 0) > 0 }, "page preview plays")
+            if let other = library.mediaURL(for: "sample.deep-tide") { hover.load(other) }
+            expect(await wait { (hover.player?.rate ?? 0) > 0 }, "hover preview plays")
+            check(page.player?.rate == 0 && page.isPlaying && page.isSuspended, "older preview is held while a newer one plays")
+            hover.stop()
+            check((page.player?.rate ?? 0) > 0 && !page.isSuspended, "older preview resumes when the newer one stops")
+            page.pause()
+            hover.load(url)
+            hover.stop()
+            check(page.player?.rate == 0 && !page.isPlaying, "a paused preview isn't resumed by another one ending")
+            page.stop()
         }
 
         // Favorites and playlists
@@ -200,6 +240,9 @@ enum SmokeTest {
         } else {
             check(false, "database reopened")
         }
+
+        app.clearAllWallpapers()
+        check(PlaybackDiagnostics.live[.desktop, default: 0] == 0 && app.engine.activePlayerCount == 0, "clearing the wallpaper releases every decoder")
 
         // Cache management
         await app.clearThumbnailCache()

@@ -82,7 +82,7 @@ struct WallpaperDetailView: View {
         ZStack {
             ThumbnailView(wallpaper: wallpaper, cornerRadius: Theme.Radius.hero)
             if let player = preview.player {
-                PlayerLayerView(player: player, gravity: .resizeAspectFill)
+                PlayerLayerView(player: player, gravity: .resizeAspectFill, onVisibilityChange: preview.setVisible)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.hero, style: .continuous))
             }
             if let failure = preview.failure {

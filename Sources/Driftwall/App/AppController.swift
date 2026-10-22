@@ -252,6 +252,9 @@ final class AppController {
             ?? displays.displays.first
     }
 
+    /// Whether the wallpaper is on any display. Prefer this in views that only need a yes/no.
+    func isLive(_ id: WallpaperID) -> Bool { engine.liveWallpaperIDs.contains(id) }
+
     func displaysShowing(_ id: WallpaperID) -> [SurfaceState] {
         engine.surfaceStates.values.filter { $0.wallpaperID == id }.sorted { $0.displayName < $1.displayName }
     }

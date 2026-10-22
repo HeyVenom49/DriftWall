@@ -81,6 +81,13 @@ The battery and Low Power Mode reasons count only when the matching setting is o
 when "pause when hidden" is on, a decoder pauses while every surface using it reports
 `NSWindow.occlusionState` without `.visible`.
 
+**Previews.** In-window previews (detail page, Lock Screen page, hover) use their own
+`PreviewPlayer`, which is released when its view disappears. `PlayerLayerView` reports its window's
+occlusion state; while the window can't be seen the preview's decoder is paused without changing its
+play/pause state, and it resumes when the window shows again. Desktop windows set `canHide = false`,
+so hiding Driftwall (⌘H) never hides the wallpaper. `PlaybackDiagnostics` counts live and created
+decoders per kind (Settings › About › Decoders).
+
 **Failures.** A player whose looper or item fails reports `.failed(message)`. The engine hides the
 affected surfaces so the normal system wallpaper shows instead of black, logs the failure to
 Diagnostics, and shows a banner. Applying the wallpaper again creates a fresh player, which retries.

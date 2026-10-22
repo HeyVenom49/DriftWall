@@ -14,12 +14,25 @@ enum CleanupAgentService {
     static var isInstalled: Bool { FileManager.default.fileExists(atPath: launchAgentURL.path) }
 
     static func agent(paths: AppPaths, aerialVideoDirectory: URL, screenSaverPath: URL) -> CleanupAgent {
-        CleanupAgent(appPath: Bundle.main.bundleURL.path,
+        CleanupAgent(appPath: originalAppURL(Bundle.main.bundleURL).path,
                      bundleIdentifier: Bundle.main.bundleIdentifier ?? "local.driftwall.app",
                      supportDirectory: paths.supportDirectory,
                      aerialVideoDirectory: aerialVideoDirectory,
                      screenSaverPath: screenSaverPath,
                      launchAgentPath: launchAgentURL)
+    }
+
+    /// Where the app really is. A quarantined app opened from Finder runs from a randomized, temporary
+    /// App Translocation mount; that path vanishes when the app quits, so the cleanup task must record
+    /// the original instead. `SecTranslocateCreateOriginalPathForURL` is exported by Security.framework
+    /// but has no public header, so it is looked up at run time; if it's unavailable the path is kept.
+    static func originalAppURL(_ url: URL) -> URL {
+        guard url.path.contains("/AppTranslocation/"),
+              let security = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY),
+              let symbol = dlsym(security, "SecTranslocateCreateOriginalPathForURL") else { return url }
+        typealias CreateOriginal = @convention(c) (CFURL, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> Unmanaged<CFURL>?
+        let createOriginal = unsafeBitCast(symbol, to: CreateOriginal.self)
+        return createOriginal(url as CFURL, nil).map { $0.takeRetainedValue() as URL } ?? url
     }
 
     /// What was last applied in this run of the app, so frequent refreshes cost nothing.

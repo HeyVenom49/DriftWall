@@ -56,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 UISnapshots.run(AppController.shared, outputDirectory: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
                 return
             }
+            if let index = CommandLine.arguments.firstIndex(of: "--perf-scenario"), index + 1 < CommandLine.arguments.count {
+                PerfHarness.run(AppController.shared, scenario: CommandLine.arguments[index + 1], arguments: CommandLine.arguments)
+                return
+            }
             let app = AppController.shared
             app.start()
             if !app.settings.hasCompletedOnboarding { app.navigation.showOnboarding = true }

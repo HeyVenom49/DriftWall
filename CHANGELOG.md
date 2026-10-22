@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.3.1 — 2026-10-22
+
+### Performance
+- **In-window previews stop decoding while you can't see them.** That covers a minimized, covered or
+  hidden window, or one on another Space. With the detail page open behind other windows, Driftwall
+  used 9.0–9.2% CPU plus 13.3–13.6% in the video decoder service; now it's 6.6–6.7% plus 8.6–8.7%,
+  the same as the wallpaper alone. A paused preview stays paused.
+- **Thumbnails are decoded off the main thread.** Before, the JPEG was decoded on first draw, during
+  scrolling. Concurrent requests for the same thumbnail share one load.
+- **Explore search settles before it rebuilds the grid.** The results follow the typed text after a
+  150 ms pause, not on every keystroke. Sort, category, filters and clearing still apply at once.
+  Typing in a 400-wallpaper library: 36.5–36.7% → 30.0–30.1% CPU, and frames over 16 ms dropped from
+  193–194 to 62–68.
+- **Only one in-app preview decodes at a time.** A newer preview, such as a hover preview over the Lock
+  Screen page's preview, holds the older one paused. The older one resumes where it was when the newer
+  one ends.
+- Grid cards now check "is this wallpaper live?" against a dedicated set. Before, they read the full
+  playback state, so every pause, resume or loading change re-evaluated them. Measured with pause
+  toggling over a 400-item grid: no measurable difference (11.7–12.7% → 12.6–12.9%).
+- The thumbnail memory cache's cost is now taken from the decoded bitmap's bytes.
+- **Settings › Storage and Settings › About no longer walk the cache and media folders on the main
+  thread,** and About no longer repeats the walk for every new log entry.
+- Measured before/after figures, the method and the remaining bottlenecks are in
+  TECHNICAL_LIMITATIONS.md › Performance measurements.
+
+### Fixed
+- **Hiding Driftwall (⌘H) no longer hides the live wallpaper.**
+- **The cleanup task now records where Driftwall.app really is.** When macOS ran the app from a
+  temporary App Translocation location (a downloaded, quarantined app), the task used to record that
+  location instead.
+
+### Developer
+- `--perf-scenario <name>` (with `DRIFTWALL_DATA_DIR`) holds the app in a repeatable scenario and
+  reports main-thread stalls, startup time, wallpaper-switch time and decoder counts. Scenarios:
+  background, paused, home, detail, detail-hidden, lockscreen, scroll, navigate, pause-toggle, type
+  and switch.
+- The smoke test checks decoder release on replace and clear, hidden-preview suspend/resume, preview
+  release and de-duplicated thumbnail loads.
+
 ## 1.3.0 — 2026-10-21
 
 ### Added

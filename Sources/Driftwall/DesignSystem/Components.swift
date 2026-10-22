@@ -74,14 +74,14 @@ struct WallpaperCard: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        let isLive = !app.displaysShowing(wallpaper.id).isEmpty
+        let isLive = app.isLive(wallpaper.id)
         let isFavorite = app.library.isFavorite(wallpaper.id)
         let available = app.library.isAvailable(wallpaper.id)
         VStack(alignment: .leading, spacing: 7) {
             ZStack {
                 ThumbnailView(wallpaper: wallpaper)
                 if showPreview, let player = preview.player {
-                    PlayerLayerView(player: player)
+                    PlayerLayerView(player: player, onVisibilityChange: preview.setVisible)
                         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
                         .transition(.opacity)
                 }

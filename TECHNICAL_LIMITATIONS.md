@@ -265,6 +265,7 @@ launch, so it follows the app if it moves.
 | Screen lock | `com.apple.screenIsLocked` / `screenIsUnlocked` distributed notifications | Widely used but **not formally documented**. If they stop arriving, the display-sleep signal still pauses playback in most lock scenarios. |
 | Battery | IOKit `IOPSNotificationCreateRunLoopSource` | Implemented. Only effective on Macs with a battery. |
 | Low Power Mode | `ProcessInfo.isLowPowerModeEnabled` + `NSProcessInfoPowerStateDidChange` | Implemented; not toggled during testing |
+| In-window preview not visible | `NSWindow.occlusionState` of the window hosting the preview | Implemented and measured: the preview's decoder pauses while its window is minimized, covered, hidden or on another Space, and resumes when it's visible again. |
 | Desktop fully covered | `NSWindow.occlusionState` of the wallpaper window | Implemented. How reliably macOS reports occlusion for desktop-level windows (for example under full-screen apps on other Spaces) was **not measured**. |
 
 ## Multi-monitor
@@ -332,19 +333,60 @@ embeddings.
 
 ## Performance measurements
 
-These figures come from one ~30-second sample with `ps`. They are indicative only, not a benchmark.
-Conditions: Apple silicon, two displays (2940×1912 and 1920×1080), one 1920×1080 HEVC sample playing
-on both (one shared decoder), "pause when hidden" off, main window open.
+Measured on 2026-10-22 with the dev harness (`DRIFTWALL_DATA_DIR=<scratch> Driftwall --perf-scenario <name>`,
+see `Sources/Driftwall/App/PerfHarness.swift`) and `ps`/`top`/`footprint` sampled over ~27 s per run.
+Before and after builds were run interleaved under identical conditions.
 
-| Metric | Value |
-| --- | --- |
-| Driftwall process CPU | ~1.4% average, 2.3% peak |
-| Driftwall resident memory | ~130 MB |
-| VideoToolbox decoder service | ~1% CPU |
-| WindowServer | ~17.5%, against a ~10% baseline measured just afterwards without Driftwall. Roughly 7 points of extra compositing for two displays; one short run. |
+**Conditions.** MacBook Air M4 (10-core), macOS 27.0.1, on AC power. Built-in 2560×1664 Retina panel
+plus an external 1920×1080 at 144 Hz. Two different wallpapers, so two decoders: 3840×2160 H.264 at
+60 fps on the built-in panel, and 2560×1440 H.264 at 60 fps on the external one. "Pause when hidden"
+was on. CPU is a percentage of one core. WindowServer idle with Driftwall not running was ~17–20%.
+The harness's stall watchdog posts to the main queue every 10 ms, which adds ~40 idle wakeups/s in
+every run.
 
-Not measured: GPU or energy impact (no `powermetrics` run), 4K or 5K sources, and many-display setups.
-No claims about specific frame rates are made.
+| Scenario | App CPU before → after | Decoder service | App energy (top) | Notes |
+| --- | --- | --- | --- | --- |
+| Wallpaper only, window closed | 6.7 / 6.4 → 6.3 / 6.7 | 9.0 / 8.6 → 8.3 / 8.9 | ~9 → ~9 | Unchanged (noise ±0.5) |
+| Wallpaper paused | 0.6 | 0.0 | 2.7 | Already idle |
+| Detail page open, window visible | 9.6 → 9.5 | 13.5 → 13.9 | 11.8 → 11.6 | Preview intentionally plays |
+| Detail page open, window not visible | **9.0 / 9.2 → 6.6 / 6.7** | **13.3 / 13.6 → 8.7 / 8.6** | 10.3 / 11.2 → 8.9 / 8.3 | Hidden preview now pauses |
+| Scrolling a 400-item grid (warm disk cache) | 35.2 / 32.6 → 35.5 / 33.5 | — | — | Frames over 16 ms: 56 / 78 → 70 / 49 (noise) |
+| Switching screens once per second | 22.0 → 20.6 | — | — | p99 main-thread latency 42 ms both |
+| Wallpaper switch (apply → playing) | median 79 ms → 80 ms | — | — | Max 129 ms both |
+| Startup (launch → playing) | 0.44–0.97 s | — | — | Unchanged |
+| Typing in Explore search, 400 items (round 2) | **36.5 / 36.7 → 30.0 / 30.1** | — | 37.4 → 31.5 | Frames over 16 ms: 194 / 193 → 68 / 62; p99 39 / 36 → 21 / 22 ms |
+| Pause/resume every 0.5 s over a 400-item grid (round 2) | 12.7 / 11.7 → 12.9 / 12.6 | — | — | No change from the "is live" set for cards |
+
+Attributable to Driftwall with the wallpaper playing: roughly app 6.5% + decoder service 9% +
+WindowServer +26–28 points (compositing two 60 fps videos), about 42% of one core in total. Memory
+footprint is ~70 MB with the window closed and ~90–160 MB with it open (the larger figure during the
+400-item scroll, bounded by the 120 MB thumbnail memory cache).
+
+**What was tried and measured but made no difference (so it was not kept):**
+- removing the SwiftUI `MenuBarExtra`. A visible AppKit status-item replicant loop costs no
+  measurable CPU;
+- an opaque, black-backed video layer after the cross-fade. WindowServer was unchanged;
+- a 2-second `preferredForwardBufferDuration` on the looped items. Footprint (68–72 → 68 MB) and
+  disk reads (4.33–4.44 → 4.36–4.39 MB/s, equal to the two videos' bitrate) were unchanged, and a short
+  read-ahead is the riskier choice for videos on an external drive.
+
+**Remaining bottlenecks:**
+- Desktop playback cost is AVFoundation decode plus WindowServer compositing of two 60 fps streams.
+  Reducing it further would need lower-resolution or lower-frame-rate media, which is the user's
+  choice.
+- Fast scrolling of large grids keeps the main thread ~30% busy in SwiftUI layout and display-list
+  work, with no single hotspot. Occasional frames of 20–55 ms remain.
+- Opening a screen costs up to ~130 ms of main-thread time for the heavier pages.
+- Pausing or resuming takes 40–85 ms of main-thread time about once in six toggles. Most of it is
+  CA rendering, consistent with the menu-bar icon redrawing for both menu bars; it wasn't pinned down
+  further.
+- A preview of the wallpaper that's already live decodes the file a second time while it's visible
+  (measured +0–1.3 points of decoder service CPU).
+
+**Not measured:** GPU and media-engine power, because `powermetrics` needs administrator rights;
+battery drain over time; scroll smoothness as seen on screen, because there's no Instruments and no
+Screen Recording permission. The main-thread watchdog is a proxy. Three or more displays were not
+measured either. No frame-rate or battery-life figure is claimed.
 
 ## Things that could not be verified in this environment
 

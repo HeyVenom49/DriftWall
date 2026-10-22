@@ -282,7 +282,7 @@ private struct LibrarySettings: View {
                 Button("Clear Cache") {
                     Task {
                         await app.clearThumbnailCache()
-                        refreshSizes()
+                        await refreshSizes()
                     }
                 }
                 Text("Cached previews are regenerated automatically when needed. Clearing the cache never affects your videos.")
@@ -290,12 +290,14 @@ private struct LibrarySettings: View {
             }
         }
         .formStyle(.grouped)
-        .task { refreshSizes() }
+        .task { await refreshSizes() }
     }
 
-    private func refreshSizes() {
-        cacheSize = app.thumbnails.cacheSize()
-        mediaSize = ThumbnailService.directorySize(app.paths.mediaDirectory)
+    /// Walks both folders off the main thread; the media folder can hold many large copies.
+    private func refreshSizes() async {
+        let thumbnails = app.thumbnails, media = app.paths.mediaDirectory
+        let sizes = await Task.detached(priority: .utility) { (thumbnails.cacheSize(), ThumbnailService.directorySize(media)) }.value
+        (cacheSize, mediaSize) = sizes
     }
 }
 
@@ -353,6 +355,9 @@ private struct ShortcutSettings: View {
 /// Version, then the diagnostics that stay on this Mac.
 private struct AboutSettings: View {
     @Environment(AppController.self) private var app
+    /// Measured off the main thread when the pane opens; walking the cache folder in `body` would
+    /// repeat it on every new log entry.
+    @State private var cacheSize: Int64?
 
     var body: some View {
         let _ = app.diagnosticsEpoch
@@ -373,7 +378,8 @@ private struct AboutSettings: View {
                 GridRow { Text("Playback").foregroundStyle(.secondary); Text(playbackSummary) }
                 GridRow { Text("Current").foregroundStyle(.secondary); Text(app.currentWallpaper?.title ?? "None") }
                 GridRow { Text("Missing files").foregroundStyle(.secondary); Text("\(app.library.missingWallpapers.count)") }
-                GridRow { Text("Preview cache").foregroundStyle(.secondary); Text(app.thumbnails.cacheSize().formattedBytes) }
+                GridRow { Text("Preview cache").foregroundStyle(.secondary); Text(cacheSize?.formattedBytes ?? "…") }
+                GridRow { Text("Decoders").foregroundStyle(.secondary); Text(PlaybackDiagnostics.summary) }
             }
             .font(.callout)
             Text("Recent events").font(.headline)
@@ -404,6 +410,10 @@ private struct AboutSettings: View {
         }
         .padding(20)
         .frame(minHeight: 420)
+        .task {
+            let thumbnails = app.thumbnails
+            cacheSize = await Task.detached(priority: .utility) { thumbnails.cacheSize() }.value
+        }
     }
 
     private var playbackSummary: String {

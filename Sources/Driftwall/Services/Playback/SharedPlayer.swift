@@ -31,6 +31,7 @@ final class SharedPlayer {
         player.actionAtItemEnd = .advance
         let looper = AVPlayerLooper(player: player, templateItem: item)
         self.looper = looper
+        PlaybackDiagnostics.opened(.desktop)
 
         observations.append(looper.observe(\.status, options: [.new]) { [weak self] looper, _ in
             let failure = looper.status == .failed ? (looper.error?.localizedDescription ?? "The video could not be looped.") : nil
@@ -61,6 +62,7 @@ final class SharedPlayer {
 
     /// Releases the decoder and all observers. The player must not be used afterwards.
     func invalidate() {
+        if looper != nil { PlaybackDiagnostics.closed(.desktop) }
         observations.forEach { $0.invalidate() }
         observations.removeAll()
         looper?.disableLooping()

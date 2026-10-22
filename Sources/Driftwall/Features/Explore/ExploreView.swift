@@ -3,10 +3,13 @@ import SwiftUI
 
 struct ExploreView: View {
     @Environment(AppController.self) private var app
+    /// The search text the results reflect. It trails the field by a short pause while typing, so the
+    /// grid is rebuilt once per pause rather than once per keystroke; nil means "same as the field".
+    @State private var settledText: String?
 
     var body: some View {
         @Bindable var navigation = app.navigation
-        let query = navigation.query
+        let query = resultsQuery(navigation.query)
         let results = app.library.search(query)
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.l) {
@@ -52,6 +55,23 @@ struct ExploreView: View {
         }
         .background(Theme.background)
         .navigationTitle("Explore")
+        .task(id: navigation.query.text) {
+            let text = navigation.query.text
+            // First appearance and clearing the field apply at once; typing settles after 150 ms.
+            if settledText == nil || text.isEmpty {
+                settledText = text
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            settledText = text
+        }
+    }
+
+    private func resultsQuery(_ live: SearchQuery) -> SearchQuery {
+        var query = live
+        if let settledText { query.text = settledText }
+        return query
     }
 
     private func summary(count: Int, query: SearchQuery) -> String {
