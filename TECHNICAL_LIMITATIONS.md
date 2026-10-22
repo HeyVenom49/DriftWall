@@ -266,7 +266,7 @@ launch, so it follows the app if it moves.
 | Battery | IOKit `IOPSNotificationCreateRunLoopSource` | Implemented. Only effective on Macs with a battery. |
 | Low Power Mode | `ProcessInfo.isLowPowerModeEnabled` + `NSProcessInfoPowerStateDidChange` | Implemented; not toggled during testing |
 | In-window preview not visible | `NSWindow.occlusionState` of the window hosting the preview | Implemented and measured: the preview's decoder pauses while its window is minimized, covered, hidden or on another Space, and resumes when it's visible again. |
-| Desktop fully covered | `NSWindow.occlusionState` of the wallpaper window | Implemented. How reliably macOS reports occlusion for desktop-level windows (for example under full-screen apps on other Spaces) was **not measured**. |
+| Desktop fully covered | `NSWindow.occlusionState` of the wallpaper window, plus window coverage of the usable area from `CGWindowListCopyWindowInfo` (`DesktopCoverage`) | Implemented and measured. Occlusion alone fires only for full-screen apps: the wallpaper stays "visible" through the menu bar and Dock. Coverage is checked once a second (with tolerance) and on app/Space changes. Gaps narrower than ~1/24 of the screen count as covered. Translucent windows count as opaque, and windows of other apps that report alpha above 0.9 are trusted. |
 
 ## Multi-monitor
 
@@ -370,6 +370,23 @@ footprint is ~70 MB with the window closed and ~90–160 MB with it open (the la
   disk reads (4.33–4.44 → 4.36–4.39 MB/s, equal to the two videos' bitrate) were unchanged, and a short
   read-ahead is the riskier choice for videos on an external drive.
 
+**Covered desktop (round 3).** One display, the KA270 showing the 2560×1440 60 fps video, was covered
+by a window filling its usable area. The same build ran with the setting off and on, ×2:
+
+| | Setting off (old behavior) | Setting on |
+| --- | --- | --- |
+| App CPU | 6.8 / 7.5% | 4.8 / 5.8% |
+| Decoder service | 7.9 / 7.9% | 4.5 / 5.1% |
+| WindowServer | 42.5 / 43.7% | 26.5 / 35.8% |
+| Disk reads | 4.39 / 4.38 MB/s | 3.38 / 3.69 MB/s |
+
+The monitor's own cost, with nothing covered (window closed, setting off vs on, ×2): app CPU 6.8 / 6.7%
+→ 7.2 / 6.6%, idle wakeups 18.6 / 18.1 → 14.3 / 18.5 per second. Within noise.
+
+**Whole-system power.** `SystemLoad` from `AppleSmartBattery` gives whole-system power without admin
+rights, but it updates only about once a minute and sometimes reports invalid values, so it wasn't
+used for short A/B runs.
+
 **Remaining bottlenecks:**
 - Desktop playback cost is AVFoundation decode plus WindowServer compositing of two 60 fps streams.
   Reducing it further would need lower-resolution or lower-frame-rate media, which is the user's
@@ -387,6 +404,18 @@ footprint is ~70 MB with the window closed and ~90–160 MB with it open (the la
 battery drain over time; scroll smoothness as seen on screen, because there's no Instruments and no
 Screen Recording permission. The main-thread watchdog is a proxy. Three or more displays were not
 measured either. No frame-rate or battery-life figure is claimed.
+
+## Known issues found during performance work
+
+- **Settings stored as text are ignored.** `loadSettings` reads the settings row only as a BLOB. A
+  row written as TEXT (for example edited with `sqlite3`'s JSON functions) is treated as missing, and
+  every preference falls back to its default without a log entry.
+- **Aerial HEVC encoder stalls (fixed).** Every wait in `ClosedGOPEncoder` was unbounded: encoder
+  back-pressure, writer readiness, flushing the last frames and finishing the file. When the encoder
+  stopped delivering frames (seen about once in six test runs), the conversion hung forever. Each wait
+  is now bounded (20 s; 60 s to finish the file). A stalled attempt is retried once from scratch, and
+  a second stall fails with "the video encoder stopped responding". Tests drop encoder output on
+  purpose to cover both paths. Why the encoder service occasionally stops responding is not known.
 
 ## Things that could not be verified in this environment
 

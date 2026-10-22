@@ -30,6 +30,11 @@ public struct AVAerialVideoConverter: AerialVideoConverter {
     /// fill, centered) to exactly this size.
     public var renderSize: CGSize
     public var averageBitRate: Int
+    /// How long any step may wait for the encoder or the movie writer before the attempt counts as
+    /// stalled. A stalled attempt is retried once from scratch.
+    var stallTimeout: TimeInterval = 20
+    /// Tests only: in this many attempts, encoder output is dropped to simulate a stalled encoder.
+    var simulatedStalls = 0
 
     public init(minimumDuration: Double = 120, renderSize: CGSize = CGSize(width: 3840, height: 2160),
                 averageBitRate: Int = 30_000_000) {
@@ -39,6 +44,23 @@ public struct AVAerialVideoConverter: AerialVideoConverter {
     }
 
     public func convert(_ source: URL, to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
+        // VideoToolbox's encoder runs in a separate service and very occasionally stops delivering
+        // frames. Every wait is bounded; a stalled attempt is retried once with everything rebuilt.
+        for attempt in 1...2 {
+            do {
+                try await convertOnce(source, to: destination, dropsOutput: attempt <= simulatedStalls, progress: progress)
+                return
+            } catch is EncoderStalled {
+                try? FileManager.default.removeItem(at: destination)
+                if attempt == 2 {
+                    throw AerialError.conversionFailed("the video encoder stopped responding. Try again; restarting the Mac helps if it keeps happening.")
+                }
+                DiagnosticsLog.shared.log(.warning, "aerial", "The video encoder stalled; retrying the conversion")
+            }
+        }
+    }
+
+    private func convertOnce(_ source: URL, to destination: URL, dropsOutput: Bool, progress: @escaping @Sendable (Double) -> Void) async throws {
         let asset = AVURLAsset(url: source)
         let (duration, tracks) = try await asset.load(.duration, .tracks)
         guard let videoTrack = tracks.first(where: { $0.mediaType == .video }) else {
@@ -72,7 +94,8 @@ public struct AVAerialVideoConverter: AerialVideoConverter {
         reader.add(output)
 
         let encoder = ClosedGOPEncoder(reader: reader, output: output, destination: destination, size: renderSize,
-                                       frameRate: frameRate, averageBitRate: averageBitRate, total: cursor.seconds, progress: progress)
+                                       frameRate: frameRate, averageBitRate: averageBitRate, total: cursor.seconds,
+                                       stallTimeout: stallTimeout, dropsOutput: dropsOutput, progress: progress)
         try await withTaskCancellationHandler {
             try await encoder.run()
         } onCancel: {
@@ -105,9 +128,13 @@ public struct AVAerialVideoConverter: AerialVideoConverter {
     }
 }
 
+/// The encoder or the movie writer made no progress within the stall timeout.
+struct EncoderStalled: Error {}
+
 /// Reads frames, encodes them with a VideoToolbox HEVC session (closed GOP) and writes the encoded
 /// samples unchanged into a QuickTime movie. Runs on its own dispatch queue: it blocks while the
 /// encoder or the writer catch up, which must not happen on Swift's shared concurrency threads.
+/// Every such wait is bounded by `stallTimeout` and ends the attempt with `EncoderStalled`.
 private final class ClosedGOPEncoder: @unchecked Sendable {
     let reader: AVAssetReader
     let output: AVAssetReaderOutput
@@ -116,6 +143,8 @@ private final class ClosedGOPEncoder: @unchecked Sendable {
     let frameRate: Float
     let averageBitRate: Int
     let total: Double
+    let stallTimeout: TimeInterval
+    let dropsOutput: Bool
     let progress: @Sendable (Double) -> Void
 
     private let queue = DispatchQueue(label: "local.driftwall.aerial-conversion")
@@ -127,7 +156,8 @@ private final class ClosedGOPEncoder: @unchecked Sendable {
     private var cancelled = false
 
     init(reader: AVAssetReader, output: AVAssetReaderOutput, destination: URL, size: CGSize, frameRate: Float,
-         averageBitRate: Int, total: Double, progress: @escaping @Sendable (Double) -> Void) {
+         averageBitRate: Int, total: Double, stallTimeout: TimeInterval, dropsOutput: Bool,
+         progress: @escaping @Sendable (Double) -> Void) {
         self.reader = reader
         self.output = output
         self.destination = destination
@@ -135,6 +165,8 @@ private final class ClosedGOPEncoder: @unchecked Sendable {
         self.frameRate = frameRate
         self.averageBitRate = averageBitRate
         self.total = total
+        self.stallTimeout = stallTimeout
+        self.dropsOutput = dropsOutput
         self.progress = progress
     }
 
@@ -193,16 +225,23 @@ private final class ClosedGOPEncoder: @unchecked Sendable {
         guard reader.startReading() else {
             throw AerialError.conversionFailed(reader.error?.localizedDescription ?? "reading failed.")
         }
-        let inFlight = DispatchSemaphore(value: 8)   // bounds memory: 4K frames are 12 MB each
+        // Bounds memory: 4K frames are 12 MB each. Created empty and filled, because libdispatch traps
+        // when a semaphore is released below its initial value, which a stalled attempt leaves it at.
+        let inFlight = DispatchSemaphore(value: 0)
+        for _ in 0..<8 { inFlight.signal() }
         var lastReported = -1.0
         while let sample = output.copyNextSampleBuffer() {
             if lock.withLock({ cancelled || failure != nil }) { break }
             guard let pixels = CMSampleBufferGetImageBuffer(sample) else { continue }
             let time = CMSampleBufferGetPresentationTimeStamp(sample)
-            inFlight.wait()
+            guard inFlight.wait(timeout: .now() + stallTimeout) == .success else {
+                fail(EncoderStalled())
+                break
+            }
             let result = VTCompressionSessionEncodeFrame(session, imageBuffer: pixels, presentationTimeStamp: time,
                                                          duration: CMSampleBufferGetDuration(sample), frameProperties: nil,
                                                          infoFlagsOut: nil) { [self] status, _, encoded in
+                if dropsOutput { return }
                 defer { inFlight.signal() }
                 if status != noErr { fail(AerialError.conversionFailed("encoding failed (\(status)).")); return }
                 if let encoded { write(encoded) }
@@ -213,7 +252,15 @@ private final class ClosedGOPEncoder: @unchecked Sendable {
                 progress(min(0.99, time.seconds / total))
             }
         }
-        VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+        if !(lock.withLock { failure is EncoderStalled }) {
+            // Waits for every frame still inside the encoder, so it is bounded as well.
+            let flushed = DispatchSemaphore(value: 0)
+            DispatchQueue.global(qos: .userInitiated).async {
+                VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+                flushed.signal()
+            }
+            if flushed.wait(timeout: .now() + stallTimeout) == .timedOut { fail(EncoderStalled()) }
+        }
 
         if lock.withLock({ cancelled }) {
             reader.cancelReading()
@@ -229,7 +276,10 @@ private final class ClosedGOPEncoder: @unchecked Sendable {
         input.markAsFinished()
         let finished = DispatchSemaphore(value: 0)
         writer.finishWriting { finished.signal() }
-        finished.wait()
+        guard finished.wait(timeout: .now() + max(60, stallTimeout)) == .success else {
+            writer.cancelWriting()
+            throw EncoderStalled()
+        }
         guard writer.status == .completed else {
             throw AerialError.conversionFailed(writer.error?.localizedDescription ?? "writing ended with status \(writer.status.rawValue).")
         }
@@ -285,7 +335,11 @@ private final class ClosedGOPEncoder: @unchecked Sendable {
             }
             guard let writer, let input else { return }
             tagTemporalLayer(sample)
-            while !input.isReadyForMoreMediaData, writer.status == .writing { usleep(500) }
+            let deadline = Date().addingTimeInterval(stallTimeout)
+            while !input.isReadyForMoreMediaData, writer.status == .writing {
+                if Date() > deadline { throw EncoderStalled() }
+                usleep(500)
+            }
             if !input.append(sample) {
                 throw AerialError.conversionFailed(writer.error?.localizedDescription ?? "writing failed.")
             }

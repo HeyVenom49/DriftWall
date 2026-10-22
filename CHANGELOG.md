@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Setting up the animated lock screen can no longer hang.** Converting the video waited forever if
+  macOS's video encoder stopped responding, which it occasionally does. Every step now has a time
+  limit, a stalled conversion is retried once from scratch, and if that also stalls you get a clear
+  message instead of endless progress.
+
+### Battery
+- **"Pause when the desktop is completely covered" now works when app windows cover the desktop.**
+  Before, it only took effect for full-screen apps. macOS reports the wallpaper window as visible
+  through the translucent menu bar and Dock, so a zoomed or tiled window never paused it, and the
+  video kept decoding behind your work. Driftwall now checks whether ordinary windows cover each
+  display's usable area (all but the menu bar and Dock) and pauses that display's video. It resumes
+  as soon as any of the desktop shows.
+  - Window positions come from `CGWindowListCopyWindowInfo`, which needs no permission. The check
+    runs once a second (coalesced) and at once on app switches, hide/unhide and Space changes, and
+    only while a wallpaper plays.
+  - Measured with the 2560×1440 60 fps video's display covered by a zoomed window: Driftwall
+    6.8–7.5% → 4.8–5.8% CPU, the decoder service 7.9% → 4.5–5.1%, WindowServer 42.5–43.7% →
+    26.5–35.8%. With every display covered, it drops to the paused level (~0.6% app, no decoding).
+  - A video shown on several displays keeps playing until all of them are covered.
+  - A translucent window that covers the desktop counts as covering. The frame you see through it
+    holds still until part of the desktop shows again.
+
 ## 1.3.1 — 2026-10-22
 
 ### Performance

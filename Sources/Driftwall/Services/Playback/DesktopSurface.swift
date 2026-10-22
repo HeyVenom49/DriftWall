@@ -108,16 +108,22 @@ final class PlayerContainerView: NSView {
 @MainActor
 final class DesktopSurface {
     let displayID: String
+    private(set) var directDisplayID: CGDirectDisplayID
     private(set) var displayName: String
     let window: DesktopWallpaperWindow
     let container: PlayerContainerView
     private(set) var wallpaperID: WallpaperID?
     private(set) var isOccluded = false
+    /// Set by the engine from `DesktopCoverageMonitor`: app windows cover the whole usable desktop.
+    var isCoveredByWindows = false
+    /// Nothing of the wallpaper can be seen, apart from a blurred hint through the menu bar or Dock.
+    var isHidden: Bool { isOccluded || isCoveredByWindows }
     var onOcclusionChange: (() -> Void)?
     private var occlusionObserver: NSObjectProtocol?
 
     init(display: DisplayInfo) {
         displayID = display.id
+        directDisplayID = display.directDisplayID
         displayName = display.name
         window = DesktopWallpaperWindow(frame: display.frame)
         container = PlayerContainerView(frame: CGRect(origin: .zero, size: display.frame.size))
@@ -136,6 +142,7 @@ final class DesktopSurface {
 
     func update(display: DisplayInfo) {
         displayName = display.name
+        directDisplayID = display.directDisplayID
         if window.frame != display.frame {
             // Handles resolution, arrangement and rotation changes.
             window.setFrame(display.frame, display: true)

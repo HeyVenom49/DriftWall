@@ -21,6 +21,9 @@ import QuartzCore
 /// - `navigate`       cycles through every sidebar screen and a detail page, one per second
 /// - `pause-toggle`   My Videos grid on screen while the wallpaper pauses and resumes every 0.5 s
 /// - `type`           types into search and deletes again (one key every 120 ms) on Explore
+/// - `covered`        main window fills one display's visible area, as a zoomed app window would
+///                    (`--perf-cover <screen name prefix>`, `--perf-cover-builtin`, else the focused screen)
+///                    and the desktop surfaces' states are printed
 /// - `switch`         re-applies alternating wallpapers and times how long each takes to play
 @MainActor
 enum PerfHarness {
@@ -94,6 +97,20 @@ enum PerfHarness {
             mainWindow?.close()
         case "navigate":
             app.navigation.show(.home)
+        case "covered":
+            // `--perf-cover-builtin` covers the built-in display; otherwise the screen with keyboard focus.
+            let builtIn = NSScreen.screens.first { DisplayService.directID(of: $0).map { CGDisplayIsBuiltin($0) != 0 } == true }
+            let named = value(after: "--perf-cover", in: CommandLine.arguments).flatMap { name in NSScreen.screens.first { $0.localizedName.hasPrefix(name) } }
+            if let screen = named ?? (CommandLine.arguments.contains("--perf-cover-builtin") ? builtIn : NSScreen.main) {
+                print("PERF covering \(screen.localizedName)")
+                mainWindow?.setFrame(screen.visibleFrame, display: true)
+            }
+            mainWindow?.orderFrontRegardless()
+            try? await Task.sleep(for: .seconds(2))
+            print("PERF pauseWhenHidden=\(app.engine.pauseWhenHidden) setting=\(app.settings.pauseWhenDesktopHidden) reasons=\(app.engine.pauseReasons)")
+            for state in app.engine.surfaceStates.values.sorted(by: { $0.displayName < $1.displayName }) {
+                print("PERF surface \(state.displayName): \(state.status.label)")
+            }
         case "pause-toggle":
             mainWindow?.setFrame(NSRect(x: 80, y: 80, width: 1240, height: 800), display: true)
             app.navigation.show(.library)

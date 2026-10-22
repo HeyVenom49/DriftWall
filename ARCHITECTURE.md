@@ -78,8 +78,10 @@ without a black flash.
 **Pausing.** Playback runs only while the set of `PauseReason`s is empty. The reasons are `user`,
 `systemSleep`, `displaysAsleep`, `screenLocked`, `sessionInactive`, `onBattery` and `lowPowerMode`.
 The battery and Low Power Mode reasons count only when the matching setting is on. Separately,
-when "pause when hidden" is on, a decoder pauses while every surface using it reports
-`NSWindow.occlusionState` without `.visible`.
+when "pause when hidden" is on, a decoder pauses while every surface using it is hidden: either
+`NSWindow.occlusionState` lacks `.visible` (full-screen apps, other Spaces), or `DesktopCoverageMonitor`
+finds ordinary app windows covering that display's usable area. The monitor runs only while
+something could play.
 
 **Previews.** In-window previews (detail page, Lock Screen page, hover) use their own
 `PreviewPlayer`, which is released when its view disappears. `PlayerLayerView` reports its window's

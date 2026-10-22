@@ -277,6 +277,39 @@ func hevcNALTypes(of url: URL) async throws -> Set<Int> {
     }
 }
 
+/// A stalled encoder (no output callbacks) must end the attempt within the stall timeout, not hang,
+/// and one stall is recovered by retrying from scratch.
+@Test func stalledEncoderIsRetriedOnce() async throws {
+    let directory = try Fixtures.temporaryDirectory()
+    let source = directory.appendingPathComponent("clip.mov"), output = directory.appendingPathComponent("aerial.mov")
+    try await Fixtures.makeVideo(at: source, width: 320, height: 180, frames: 60)
+    var converter = AVAerialVideoConverter(minimumDuration: 2, renderSize: CGSize(width: 640, height: 360), averageBitRate: 1_000_000)
+    converter.stallTimeout = 1
+    converter.simulatedStalls = 1
+    let start = Date()
+    try await converter.convert(source, to: output) { _ in }
+    #expect(Date().timeIntervalSince(start) < 30)
+    let metadata = try await MediaInspector().inspect(output)
+    #expect(metadata.codec == "HEVC" && metadata.duration >= 2)
+}
+
+@Test func encoderThatKeepsStallingFailsWithAClearError() async throws {
+    let directory = try Fixtures.temporaryDirectory()
+    let source = directory.appendingPathComponent("clip.mov"), output = directory.appendingPathComponent("aerial.mov")
+    try await Fixtures.makeVideo(at: source, width: 320, height: 180, frames: 60)
+    var converter = AVAerialVideoConverter(minimumDuration: 2, renderSize: CGSize(width: 640, height: 360), averageBitRate: 1_000_000)
+    converter.stallTimeout = 1
+    converter.simulatedStalls = 2
+    let start = Date()
+    await #expect {
+        try await converter.convert(source, to: output) { _ in }
+    } throws: { error in
+        (error as? AerialError).map { "\($0.localizedDescription)".contains("stopped responding") } ?? false
+    }
+    #expect(Date().timeIntervalSince(start) < 30)
+    #expect(!FileManager.default.fileExists(atPath: output.path))
+}
+
 /// Opt-in (DRIFTWALL_SLOW_TESTS=1 DRIFTWALL_SAMPLE=<path to a sample .mov>): converts with the exact
 /// production settings, 3840×2160 HEVC, at least 120 s, and reports how long it took.
 @Test(.enabled(if: ProcessInfo.processInfo.environment["DRIFTWALL_SLOW_TESTS"] == "1"))

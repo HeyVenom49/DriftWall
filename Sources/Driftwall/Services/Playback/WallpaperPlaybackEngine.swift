@@ -74,9 +74,15 @@ final class WallpaperPlaybackEngine {
     @ObservationIgnored private var surfaces: [String: DesktopSurface] = [:]
     @ObservationIgnored private var players: [WallpaperID: SharedPlayer] = [:]
     @ObservationIgnored private let log: DiagnosticsLog
+    @ObservationIgnored private let coverage = DesktopCoverageMonitor()
 
     init(log: DiagnosticsLog = .shared) {
         self.log = log
+        coverage.onChange = { [weak self] covered in
+            guard let self else { return }
+            for surface in self.surfaces.values { surface.isCoveredByWindows = covered.contains(surface.directDisplayID) }
+            self.updatePlayback()
+        }
     }
 
     var isPaused: Bool { !pauseReasons.isEmpty }
@@ -127,6 +133,7 @@ final class WallpaperPlaybackEngine {
         surfaces.removeAll()
         players.values.forEach { $0.invalidate() }
         players.removeAll()
+        coverage.setActive(false)
         surfaceStates.removeAll()
         liveWallpaperIDs.removeAll()
         activePlayerCount = 0
@@ -180,11 +187,17 @@ final class WallpaperPlaybackEngine {
     }
 
     private func updatePlayback() {
+        // Watch window coverage only while something could play; otherwise it would wake up for nothing.
+        let watchCoverage = pauseWhenHidden && pauseReasons.isEmpty && !surfaces.isEmpty
+        if watchCoverage != coverage.isActive {
+            coverage.setActive(watchCoverage)
+            if !watchCoverage { surfaces.values.forEach { $0.isCoveredByWindows = false } }
+        }
         var states: [String: SurfaceState] = [:]
         var playing = 0
         for (id, player) in players {
             let attached = surfaces.values.filter { $0.wallpaperID == id }
-            let allHidden = !attached.isEmpty && attached.allSatisfy(\.isOccluded)
+            let allHidden = !attached.isEmpty && attached.allSatisfy(\.isHidden)
             let shouldPlay = pauseReasons.isEmpty && !(pauseWhenHidden && allHidden) && !player.isFailed
             if shouldPlay { player.play() } else { player.pause() }
             if shouldPlay { playing += 1 }

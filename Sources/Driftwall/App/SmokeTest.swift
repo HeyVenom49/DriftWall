@@ -51,6 +51,8 @@ enum SmokeTest {
 
     private static func execute(_ app: AppController) async {
         app.start()
+        // Real windows on this Mac may cover a display, which pauses it; the coverage check turns it back on.
+        app.settings.pauseWhenDesktopHidden = false
         let library = app.library
         check(library.wallpapers.count >= 8, "bundled catalog loaded (\(library.wallpapers.count) wallpapers)")
         check(library.missingWallpapers.isEmpty, "all bundled media files present")
@@ -111,6 +113,22 @@ enum SmokeTest {
         } else {
             print("SMOKE info single display: per-display assignment not exercised")
         }
+
+        // A window covering one display's whole usable area pauses that display; uncovering resumes it.
+        app.settings.pauseWhenDesktopHidden = true
+        if let target = app.displays.displays.first(where: { app.engine.surfaceStates[$0.id]?.status == .playing }),
+           let screen = app.displays.screen(for: target) {
+            let cover = NSWindow(contentRect: screen.visibleFrame, styleMask: [.borderless], backing: .buffered, defer: false)
+            cover.isReleasedWhenClosed = false
+            cover.backgroundColor = .gray
+            cover.setFrame(screen.visibleFrame, display: true)
+            cover.orderFrontRegardless()
+            expect(await wait { if case .paused = app.engine.surfaceStates[target.id]?.status { return true } else { return false } },
+                   "a display covered by windows pauses (\(app.engine.surfaceStates[target.id]?.status.label ?? "none"))")
+            cover.orderOut(nil)
+            expect(await wait { app.engine.surfaceStates[target.id]?.status == .playing }, "uncovering the display resumes playback")
+        }
+        app.settings.pauseWhenDesktopHidden = false
 
         // In-window preview: holds its decoder while its window can't be seen, keeps the user's choice.
         if let url = library.mediaURL(for: "sample.neon-grid") {
