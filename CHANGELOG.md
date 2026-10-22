@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.2 — 2026-10-22
 
 ### Fixed
 - **Setting up the animated lock screen can no longer hang.** Converting the video waited forever if
